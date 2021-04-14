@@ -1,6 +1,6 @@
-#	$NetBSD: Makefile,v 1.20 2015/03/05 10:22:25 joerg Exp $
+#	$NetBSD: Makefile,v 1.23 2020/02/21 15:00:44 joerg Exp $
 
-.include <bsd.init.mk>
+.include <bsd.hostinit.mk>
 
 #
 # Do *not* set HOSTPROG or HOSTLIB at this point otherwise
@@ -15,12 +15,12 @@ config/config.status: ${LLVM_SRCDIR}/configure
 	mkdir -p config
 	printf '#!/bin/sh\necho 2.7.3' > config/python
 	chmod 755 config/python
-	cd config && ${HOST_SH} ${LLVM_SRCDIR}/configure ${LLVM_CONFIGURE_ARGS} \
+	cd config && ${HOST_SH} ${CONFIG_DIR}/configure ${LLVM_CONFIGURE_ARGS} \
 	    --enable-optimized CC=${HOST_CC:Q} CXX=${HOST_CXX:Q} \
 	    --with-python=${.OBJDIR}/config/python
 # --disable-assertions
 
-need-dl:
+need-dl: Makefile
 	printf '#include <dlfcn.h>\nint main(void){void *p; return dladdr(p, p);}' > need-dl.c
 	if ${HOST_CC} -o need-dl.out -D_GNU_SOURCE need-dl.c > /dev/null 2>&1; then \
 		echo > ${.TARGET}; \
@@ -30,8 +30,8 @@ need-dl:
 		echo > ${.TARGET}; \
 	fi
 
-need-terminfo:
-	printf '#include <term.h>\nint main(void){return setupterm(0, 0, 0);}' > need-terminfo.c
+need-terminfo: Makefile
+	printf 'int setupterm(char *, int, int *);\nint main(void){return setupterm("", 0, 0);}' > need-terminfo.c
 	for lib in tinfo terminfo ncurses curses; do \
 		if ${HOST_CC} -o need-terminfo.out need-terminfo.c -l$$lib > /dev/null 2>&1; then \
 			echo -l$$lib > ${.TARGET}; \
