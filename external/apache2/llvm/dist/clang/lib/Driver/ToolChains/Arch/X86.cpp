@@ -99,6 +99,7 @@ const char *x86::getX86TargetCPU(const ArgList &Args,
   case llvm::Triple::OpenBSD:
     return "i486";
   case llvm::Triple::Haiku:
+  case llvm::Triple::Minix:
     return "i586";
   default:
     // Fallback to p4.

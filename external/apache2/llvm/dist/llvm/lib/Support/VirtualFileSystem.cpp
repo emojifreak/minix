@@ -40,7 +40,9 @@
 #include "llvm/Support/YAMLParser.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <atomic>
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <cassert>
 #include <cstdint>
 #include <iterator>
@@ -1865,7 +1867,11 @@ void vfs::collectVFSFromYAML(std::unique_ptr<MemoryBuffer> Buffer,
 }
 
 UniqueID vfs::getNextVirtualUniqueID() {
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
   static std::atomic<unsigned> UID;
+#else
+  static unsigned UID;
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
   unsigned ID = ++UID;
   // The following assumes that uint64_t max will never collide with a real
   // dev_t value from the OS.

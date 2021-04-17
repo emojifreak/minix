@@ -36,7 +36,9 @@
 #include "llvm/Support/Program.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <atomic>
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -352,7 +354,11 @@ CXString clang_getCompletionFixIt(CXCodeCompleteResults *results,
 /// currently active.
 ///
 /// Used for debugging purposes only.
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 static std::atomic<unsigned> CodeCompletionResultObjects;
+#else
+static unsigned CodeCompletionResultObjects;
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 
 AllocatedCXCodeCompleteResults::AllocatedCXCodeCompleteResults(
     IntrusiveRefCntPtr<FileManager> FileMgr)

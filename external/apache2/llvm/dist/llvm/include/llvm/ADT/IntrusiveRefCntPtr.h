@@ -55,7 +55,9 @@
 #ifndef LLVM_ADT_INTRUSIVEREFCNTPTR_H
 #define LLVM_ADT_INTRUSIVEREFCNTPTR_H
 
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <atomic>
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <cassert>
 #include <cstddef>
 
@@ -85,7 +87,11 @@ public:
 
 /// A thread-safe version of \c RefCountedBase.
 template <class Derived> class ThreadSafeRefCountedBase {
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
   mutable std::atomic<int> RefCount;
+#else
+  mutable int RefCount;
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 
 protected:
   ThreadSafeRefCountedBase() : RefCount(0) {}

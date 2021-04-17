@@ -194,8 +194,12 @@ Memory::protectMappedMemory(const MemoryBlock &M, unsigned Flags) {
   // and CPU segfaults on trying to clear cache on !PROT_READ page.  Therefore we need
   // to temporarily add PROT_READ for the sake of flushing the instruction caches.
   if (InvalidateCache && !(Protect & PROT_READ)) {
+#if !defined(__minix)
     int Result = ::mprotect((void *)Start, End - Start, Protect | PROT_READ);
     if (Result != 0)
+#else
+    errno = ENOSYS;
+#endif /* !defined(__minix) */
       return std::error_code(errno, std::generic_category());
 
     Memory::InvalidateInstructionCache(M.Address, M.AllocatedSize);
@@ -203,9 +207,13 @@ Memory::protectMappedMemory(const MemoryBlock &M, unsigned Flags) {
   }
 #endif
 
+#if !defined(__minix)
   int Result = ::mprotect((void *)Start, End - Start, Protect);
 
   if (Result != 0)
+#else
+    errno = ENOSYS;
+#endif /* !defined(__minix) */
     return std::error_code(errno, std::generic_category());
 
   if (InvalidateCache)

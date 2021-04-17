@@ -51,7 +51,8 @@ if(LLVM_BUILD_LLVM_DYLIB)
      OR ("${CMAKE_SYSTEM_NAME}" STREQUAL "OpenBSD")
      OR ("${CMAKE_SYSTEM_NAME}" STREQUAL "Fuchsia")
      OR ("${CMAKE_SYSTEM_NAME}" STREQUAL "DragonFly")
-     OR ("${CMAKE_SYSTEM_NAME}" STREQUAL "SunOS")) # FIXME: It should be "GNU ld for elf"
+     OR ("${CMAKE_SYSTEM_NAME}" STREQUAL "SunOS")
+     OR ("${CMAKE_SYSTEM_NAME}" STREQUAL "Minix")) # FIXME: It should be "GNU ld for elf"
     configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/simple_version_script.map.in
     ${LLVM_LIBRARY_DIR}/tools/llvm-shlib/simple_version_script.map)

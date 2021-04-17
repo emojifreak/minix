@@ -90,7 +90,9 @@
 #include "llvm/Support/VirtualFileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <atomic>
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -236,7 +238,11 @@ const unsigned DefaultPreambleRebuildInterval = 5;
 /// Tracks the number of ASTUnit objects that are currently active.
 ///
 /// Used for debugging purposes only.
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 static std::atomic<unsigned> ActiveASTUnitObjects;
+#else
+static unsigned ActiveASTUnitObjects;
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 
 ASTUnit::ASTUnit(bool _MainFileIsAST)
     : MainFileIsAST(_MainFileIsAST), WantTiming(getenv("LIBCLANG_TIMING")),
