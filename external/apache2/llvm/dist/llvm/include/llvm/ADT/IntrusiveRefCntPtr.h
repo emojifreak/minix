@@ -97,12 +97,20 @@ protected:
   ThreadSafeRefCountedBase() : RefCount(0) {}
 
 public:
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
   void Retain() const { RefCount.fetch_add(1, std::memory_order_relaxed); }
 
   void Release() const {
     int NewRefCount = RefCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
     assert(NewRefCount >= 0 && "Reference count was already zero.");
     if (NewRefCount == 0)
+#else
+  void Retain() const { ++RefCount; }
+
+  void Release() const {
+    assert(RefCount > 0 && "Reference count is already zero.");
+    if (--RefCount == 0)
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
       delete static_cast<const Derived *>(this);
   }
 };
