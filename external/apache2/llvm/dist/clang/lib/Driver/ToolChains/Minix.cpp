@@ -7,6 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "Minix.h"
+#include "Arch/ARM.h"
+#include "Arch/Mips.h"
+#include "Arch/Sparc.h"
 #include "CommonArgs.h"
 #include "InputInfo.h"
 #include "clang/Driver/Compilation.h"
@@ -16,6 +19,8 @@
 #include "llvm/Support/VirtualFileSystem.h"
 
 using namespace clang::driver;
+using namespace clang::driver::tools;
+using namespace clang::driver::toolchains;
 using namespace clang;
 using namespace llvm::opt;
 
@@ -108,6 +113,8 @@ void tools::minix::Linker::ConstructJob(Compilation &C, const JobAction &JA,
                                  const InputInfoList &Inputs,
                                  const ArgList &Args,
                                  const char *LinkingOutput) const {
+  const toolchains::Minix &ToolChain =
+    static_cast<const toolchains::Minix &>(getToolChain());
   const Driver &D = getToolChain().getDriver();
   ArgStringList CmdArgs;
 
@@ -117,17 +124,12 @@ void tools::minix::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   CmdArgs.push_back("--eh-frame-hdr");
   if (Args.hasArg(options::OPT_static)) {
     CmdArgs.push_back("-Bstatic");
-    if (Args.hasArg(options::OPT_pie)) {
-      Args.AddAllArgs(CmdArgs, options::OPT_pie);
-      CmdArgs.push_back("--no-dynamic-linker");
-    }
   } else {
     if (Args.hasArg(options::OPT_rdynamic))
       CmdArgs.push_back("-export-dynamic");
     if (Args.hasArg(options::OPT_shared)) {
       CmdArgs.push_back("-Bshareable");
     } else {
-      Args.AddAllArgs(CmdArgs, options::OPT_pie);
       CmdArgs.push_back("-dynamic-linker");
       // LSC: Small deviation from the NetBSD version.
       //      Use the same linker path as gcc.
@@ -234,7 +236,7 @@ void tools::minix::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     }
     CmdArgs.push_back(
         Args.MakeArgString(ToolChain.GetFilePath("crti.o")));
-    if (Args.hasArg(options::OPT_shared) || Args.hasArg(options::OPT_pie)) {
+    if (Args.hasArg(options::OPT_shared)){
       CmdArgs.push_back(
           Args.MakeArgString(ToolChain.GetFilePath("crtbeginS.o")));
     } else {
@@ -314,7 +316,7 @@ void tools::minix::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nostartfiles)) {
-    if (Args.hasArg(options::OPT_shared) || Args.hasArg(options::OPT_pie))
+    if (Args.hasArg(options::OPT_shared))
       CmdArgs.push_back(
           Args.MakeArgString(ToolChain.GetFilePath("crtendS.o")));
     else

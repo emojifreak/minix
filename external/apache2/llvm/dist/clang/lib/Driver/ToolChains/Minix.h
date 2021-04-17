@@ -16,6 +16,7 @@
 namespace clang {
 namespace driver {
 namespace tools {
+
 /// minix -- Directly call GNU Binutils assembler and linker
 namespace minix {
 class LLVM_LIBRARY_VISIBILITY Assembler : public GnuTool {
