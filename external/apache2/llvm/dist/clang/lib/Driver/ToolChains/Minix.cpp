@@ -285,8 +285,7 @@ void tools::minix::Linker::ConstructJob(Compilation &C, const JobAction &JA,
 
   if (!Args.hasArg(options::OPT_nostdlib, options::OPT_nodefaultlibs)) {
     if (D.CCCIsCXX()) {
-      if (getToolChain().ShouldLinkCXXStdlib(Args))
-        getToolChain().AddCXXStdlibLibArgs(Args, CmdArgs);
+      getToolChain().AddCXXStdlibLibArgs(Args, CmdArgs);
       CmdArgs.push_back("-lm");
 
       /* LSC: Hack as lc++ is linked against mthread. */
@@ -395,14 +394,25 @@ Tool *toolchains::Minix::buildLinker() const {
   return new tools::minix::Linker(*this);
 }
 
-ToolChain::CXXStdlibType Minix::GetDefaultCXXStdlibType() const {
+ToolChain::CXXStdlibType
+Minix::GetCXXStdlibType(const ArgList &Args) const {
+  if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
+    StringRef Value = A->getValue();
+    if (Value == "libstdc++")
+      return ToolChain::CST_Libstdcxx;
+    if (Value == "libc++")
+      return ToolChain::CST_Libcxx;
+
+    getDriver().Diag(diag::err_drv_invalid_stdlib_name)
+      << A->getAsString(Args);
+  }
+
 #if 0 /* LSC: We only us libcxx by default */
   unsigned Major, Minor, Micro;
   getTriple().getOSVersion(Major, Minor, Micro);
-  if (Major >= 7 || Major == 0) {
+  if (Major >= 7 || (Major == 6 && Minor == 99 && Micro >= 49) || Major == 0) {
     switch (getArch()) {
     case llvm::Triple::aarch64:
-    case llvm::Triple::aarch64_be:
     case llvm::Triple::arm:
     case llvm::Triple::armeb:
     case llvm::Triple::thumb:
@@ -410,8 +420,6 @@ ToolChain::CXXStdlibType Minix::GetDefaultCXXStdlibType() const {
     case llvm::Triple::ppc:
     case llvm::Triple::ppc64:
     case llvm::Triple::ppc64le:
-    case llvm::Triple::sparc:
-    case llvm::Triple::sparcv9:
     case llvm::Triple::x86:
     case llvm::Triple::x86_64:
       return ToolChain::CST_Libcxx;
@@ -425,29 +433,22 @@ ToolChain::CXXStdlibType Minix::GetDefaultCXXStdlibType() const {
 #endif /* 0 */
 }
 
-void Minix::addLibCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
-                                   llvm::opt::ArgStringList &CC1Args) const {
-  const std::string Candidates[] = {
-    // directory relative to build tree
-    getDriver().Dir + "/../include/c++/v1",
-    // system install with full upstream path
-    getDriver().SysRoot + "/usr/include/c++/v1",
-    // system install from src
-    getDriver().SysRoot + "/usr/include/c++",
-  };
-
-  for (const auto &IncludePath : Candidates) {
-    if (!getVFS().exists(IncludePath + "/__config"))
-      continue;
-
-    // Use the first candidate that looks valid.
-    addSystemInclude(DriverArgs, CC1Args, IncludePath);
+void Minix::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
+                                          ArgStringList &CC1Args) const {
+  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
+      DriverArgs.hasArg(options::OPT_nostdincxx))
     return;
-  }
-}
 
-void Minix::addLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
-                                      llvm::opt::ArgStringList &CC1Args) const {
-  addLibStdCXXIncludePaths(getDriver().SysRoot, "/usr/include/g++", "", "", "",
-                           "", DriverArgs, CC1Args);
+  switch (GetCXXStdlibType(DriverArgs)) {
+  case ToolChain::CST_Libcxx:
+    addSystemInclude(DriverArgs, CC1Args,
+                     getDriver().SysRoot + "/usr/include/c++/");
+    break;
+  case ToolChain::CST_Libstdcxx:
+    addSystemInclude(DriverArgs, CC1Args,
+                     getDriver().SysRoot + "/usr/include/g++");
+    addSystemInclude(DriverArgs, CC1Args,
+                     getDriver().SysRoot + "/usr/include/g++/backward");
+    break;
+  }
 }
