@@ -178,8 +178,8 @@ namespace clang {
   class LocalInstantiationScope {
   public:
     /// \brief A set of declarations.
-    typedef SmallVector<Decl *, 4> DeclArgumentPack;
-    
+    typedef SmallVector<ParmVarDecl *, 4> DeclArgumentPack;
+
   private:
     /// \brief Reference to the semantic analysis that is performing
     /// this template instantiation.
@@ -239,8 +239,8 @@ namespace clang {
 
     // This class is non-copyable
     LocalInstantiationScope(
-      const LocalInstantiationScope &) LLVM_DELETED_FUNCTION;
-    void operator=(const LocalInstantiationScope &) LLVM_DELETED_FUNCTION;
+      const LocalInstantiationScope &) = delete;
+    void operator=(const LocalInstantiationScope &) = delete;
 
   public:
     LocalInstantiationScope(Sema &SemaRef, bool CombineWithOuterScope = false)
@@ -332,7 +332,7 @@ namespace clang {
     findInstantiationOf(const Decl *D);
 
     void InstantiatedLocal(const Decl *D, Decl *Inst);
-    void InstantiatedLocalPackArg(const Decl *D, Decl *Inst);
+    void InstantiatedLocalPackArg(const Decl *D, ParmVarDecl *Inst);
     void MakeInstantiatedLocalArgPack(const Decl *D);
     
     /// \brief Note that the given parameter pack has been partially substituted
@@ -410,9 +410,11 @@ namespace clang {
 #define OBJCCONTAINER(DERIVED, BASE)
 #define FILESCOPEASM(DERIVED, BASE)
 #define IMPORT(DERIVED, BASE)
+#define EXPORT(DERIVED, BASE)
 #define LINKAGESPEC(DERIVED, BASE)
 #define OBJCCOMPATIBLEALIAS(DERIVED, BASE)
 #define OBJCMETHOD(DERIVED, BASE)
+#define OBJCTYPEPARAM(DERIVED, BASE)
 #define OBJCIVAR(DERIVED, BASE)
 #define OBJCPROPERTY(DERIVED, BASE)
 #define OBJCPROPERTYIMPL(DERIVED, BASE)
@@ -432,7 +434,8 @@ namespace clang {
     Decl *VisitFunctionDecl(FunctionDecl *D,
                             TemplateParameterList *TemplateParams);
     Decl *VisitDecl(Decl *D);
-    Decl *VisitVarDecl(VarDecl *D, bool InstantiatingVarTemplate);
+    Decl *VisitVarDecl(VarDecl *D, bool InstantiatingVarTemplate,
+                       ArrayRef<BindingDecl *> *Bindings = nullptr);
 
     // Enable late instantiation of attributes.  Late instantiated attributes
     // will be stored in LA.
@@ -512,6 +515,11 @@ namespace clang {
         VarTemplateDecl *VarTemplate,
         VarTemplatePartialSpecializationDecl *PartialSpec);
     void InstantiateEnumDefinition(EnumDecl *Enum, EnumDecl *Pattern);
+
+  private:
+    template<typename T>
+    Decl *instantiateUnresolvedUsingDecl(T *D,
+                                         bool InstantiatingPackElement = false);
   };  
 }
 

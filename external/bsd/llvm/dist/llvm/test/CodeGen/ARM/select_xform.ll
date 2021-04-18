@@ -183,7 +183,7 @@ define i32 @t12(i32 %a, i32 %b) nounwind {
 ; Handle frame index operands.
 define void @pr13628() nounwind uwtable align 2 {
   %x3 = alloca i8, i32 256, align 8
-  %x4 = load i8* undef, align 1
+  %x4 = load i8, i8* undef, align 1
   %x5 = icmp ne i8 %x4, 0
   %x6 = select i1 %x5, i8* %x3, i8* null
   call void @bar(i8* %x6) nounwind
@@ -280,7 +280,7 @@ entry:
 ; ARM: and r0, {{r[0-9]+}}, {{r[0-9]+}}
 
 ; T2-LABEL: t18:
-; T2: and.w r0, {{r[0-9]+}}
+; T2: and{{s|.w}} r0, {{r[0-9]+}}
   %cmp = icmp ne i32 %x, 0
   %cond = select i1 %cmp, i32 5, i32 2
   %cmp1 = icmp ne i32 %x, -1

@@ -1,8 +1,9 @@
-; RUN: llc < %s -march=ppc64 -mcpu=pwr7 | FileCheck %s
+; RUN: llc -relocation-model=static -verify-machineinstrs < %s -march=ppc64 -mcpu=pwr7 | FileCheck %s
 target datalayout = "E-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v128:128:128-n32:64"
 target triple = "powerpc64-unknown-linux-gnu"
 
-define void @foo() nounwind readnone noinline {
+
+define void @foo() nounwind noinline {
   ret void
 }
 
@@ -14,7 +15,8 @@ define weak void @foo_weak() nounwind {
 define void @test_direct() nounwind readnone {
 ; CHECK-LABEL: test_direct:
   tail call void @foo() nounwind
-; CHECK: bl foo
+; Because of tail call optimization, it can be 'b' instruction.
+; CHECK: [[BR:b[l]?]] foo
 ; CHECK-NOT: nop
   ret void
 }
@@ -73,7 +75,7 @@ define double @test_external(double %x) nounwind {
 @g = external global void ()*
 declare void @h(i64)
 define void @test_indir_toc_reload(i64 %x) {
-  %1 = load void ()** @g
+  %1 = load void ()*, void ()** @g
   call void %1()
   call void @h(i64 %x)
   ret void

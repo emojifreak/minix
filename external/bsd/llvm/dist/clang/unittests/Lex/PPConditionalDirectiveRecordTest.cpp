@@ -22,7 +22,6 @@
 #include "clang/Lex/PreprocessorOptions.h"
 #include "gtest/gtest.h"
 
-using namespace llvm;
 using namespace clang;
 
 namespace {
@@ -61,13 +60,12 @@ class VoidModuleLoader : public ModuleLoader {
 
   void makeModuleVisible(Module *Mod,
                          Module::NameVisibilityKind Visibility,
-                         SourceLocation ImportLoc,
-                         bool Complain) override { }
+                         SourceLocation ImportLoc) override { }
 
   GlobalModuleIndex *loadGlobalModuleIndex(SourceLocation TriggerLoc) override
     { return nullptr; }
   bool lookupMissingImports(StringRef Name, SourceLocation TriggerLoc) override
-    { return 0; };
+    { return 0; }
 };
 
 TEST_F(PPConditionalDirectiveRecordTest, PPRecAPI) {
@@ -90,14 +88,15 @@ TEST_F(PPConditionalDirectiveRecordTest, PPRecAPI) {
       "#endif\n"
       "9\n";
 
-  std::unique_ptr<MemoryBuffer> Buf = MemoryBuffer::getMemBuffer(source);
+  std::unique_ptr<llvm::MemoryBuffer> Buf =
+      llvm::MemoryBuffer::getMemBuffer(source);
   SourceMgr.setMainFileID(SourceMgr.createFileID(std::move(Buf)));
 
   VoidModuleLoader ModLoader;
-  HeaderSearch HeaderInfo(new HeaderSearchOptions, SourceMgr, Diags, LangOpts, 
-                          Target.get());
-  Preprocessor PP(new PreprocessorOptions(), Diags, LangOpts, SourceMgr,
-                  HeaderInfo, ModLoader,
+  HeaderSearch HeaderInfo(std::make_shared<HeaderSearchOptions>(), SourceMgr,
+                          Diags, LangOpts, Target.get());
+  Preprocessor PP(std::make_shared<PreprocessorOptions>(), Diags, LangOpts,
+                  SourceMgr, HeaderInfo, ModLoader,
                   /*IILookup =*/nullptr,
                   /*OwnsHeaderSearch =*/false);
   PP.Initialize(*Target);

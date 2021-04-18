@@ -10,25 +10,33 @@
 #ifndef LLVM_SUPPORT_YAMLTRAITS_H
 #define LLVM_SUPPORT_YAMLTRAITS_H
 
-
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/Support/Compiler.h"
+#include "llvm/Support/AlignOf.h"
+#include "llvm/Support/Allocator.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/YAMLParser.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cassert>
+#include <cctype>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <new>
+#include <string>
 #include <system_error>
+#include <type_traits>
+#include <vector>
 
 namespace llvm {
 namespace yaml {
 
+struct EmptyContext {};
 
 /// This class should be specialized by any type that needs to be converted
 /// to/from a YAML mapping.  For example:
@@ -46,8 +54,33 @@ struct MappingTraits {
   // static void mapping(IO &io, T &fields);
   // Optionally may provide:
   // static StringRef validate(IO &io, T &fields);
+  //
+  // The optional flow flag will cause generated YAML to use a flow mapping
+  // (e.g. { a: 0, b: 1 }):
+  // static const bool flow = true;
 };
 
+/// This class is similar to MappingTraits<T> but allows you to pass in
+/// additional context for each map operation.  For example:
+///
+///     struct MappingContextTraits<MyStruct, MyContext> {
+///       static void mapping(IO &io, MyStruct &s, MyContext &c) {
+///         io.mapRequired("name", s.name);
+///         io.mapRequired("size", s.size);
+///         io.mapOptional("age",  s.age);
+///         ++c.TimesMapped;
+///       }
+///     };
+template <class T, class Context> struct MappingContextTraits {
+  // Must provide:
+  // static void mapping(IO &io, T &fields, Context &Ctx);
+  // Optionally may provide:
+  // static StringRef validate(IO &io, T &fields, Context &Ctx);
+  //
+  // The optional flow flag will cause generated YAML to use a flow mapping
+  // (e.g. { a: 0, b: 1 }):
+  // static const bool flow = true;
+};
 
 /// This class should be specialized by any integral type that converts
 /// to/from a YAML scalar where there is a one-to-one mapping between
@@ -66,7 +99,6 @@ struct ScalarEnumerationTraits {
   // static void enumeration(IO &io, T &value);
 };
 
-
 /// This class should be specialized by any integer type that is a union
 /// of bit values and the YAML representation is a flow sequence of
 /// strings.  For example:
@@ -83,7 +115,6 @@ struct ScalarBitSetTraits {
   // Must provide:
   // static void bitset(IO &io, T &value);
 };
-
 
 /// This class should be specialized by type that requires custom conversion
 /// to/from a yaml scalar.  For example:
@@ -116,12 +147,39 @@ struct ScalarTraits {
   //static bool mustQuote(StringRef);
 };
 
+/// This class should be specialized by type that requires custom conversion
+/// to/from a YAML literal block scalar. For example:
+///
+///    template <>
+///    struct BlockScalarTraits<MyType> {
+///      static void output(const MyType &Value, void*, llvm::raw_ostream &Out)
+///      {
+///        // stream out custom formatting
+///        Out << Val;
+///      }
+///      static StringRef input(StringRef Scalar, void*, MyType &Value) {
+///        // parse scalar and set `value`
+///        // return empty string on success, or error string
+///        return StringRef();
+///      }
+///    };
+template <typename T>
+struct BlockScalarTraits {
+  // Must provide:
+  //
+  // Function to write the value as a string:
+  // static void output(const T &Value, void *ctx, llvm::raw_ostream &Out);
+  //
+  // Function to convert a string to a value.  Returns the empty
+  // StringRef on success or an error string if string is malformed:
+  // static StringRef input(StringRef Scalar, void *ctxt, T &Value);
+};
 
 /// This class should be specialized by any type that needs to be converted
 /// to/from a YAML sequence.  For example:
 ///
 ///    template<>
-///    struct SequenceTraits< std::vector<MyType> > {
+///    struct SequenceTraits< std::vector<MyType>> {
 ///      static size_t size(IO &io, std::vector<MyType> &seq) {
 ///        return seq.size();
 ///      }
@@ -142,7 +200,6 @@ struct SequenceTraits {
   // static const bool flow = true;
 };
 
-
 /// This class should be specialized by any type that needs to be converted
 /// to/from a list of YAML documents.
 template<typename T>
@@ -152,16 +209,18 @@ struct DocumentListTraits {
   // static T::value_type& element(IO &io, T &seq, size_t index);
 };
 
-
-// Only used by compiler if both template types are the same
-template <typename T, T>
-struct SameType;
+/// This class should be specialized by any type that needs to be converted
+/// to/from a YAML mapping in the case where the names of the keys are not known
+/// in advance, e.g. a string map.
+template <typename T>
+struct CustomMappingTraits {
+  // static void inputOne(IO &io, StringRef key, T &elem);
+  // static void output(IO &io, T &elem);
+};
 
 // Only used for better diagnostics of missing traits
 template <typename T>
 struct MissingTrait;
-
-
 
 // Test if ScalarEnumerationTraits<T> is defined on type T.
 template <class T>
@@ -177,9 +236,8 @@ struct has_ScalarEnumerationTraits
 
 public:
   static bool const value =
-    (sizeof(test<ScalarEnumerationTraits<T> >(nullptr)) == 1);
+    (sizeof(test<ScalarEnumerationTraits<T>>(nullptr)) == 1);
 };
-
 
 // Test if ScalarBitSetTraits<T> is defined on type T.
 template <class T>
@@ -194,9 +252,8 @@ struct has_ScalarBitSetTraits
   static double test(...);
 
 public:
-  static bool const value = (sizeof(test<ScalarBitSetTraits<T> >(nullptr)) == 1);
+  static bool const value = (sizeof(test<ScalarBitSetTraits<T>>(nullptr)) == 1);
 };
-
 
 // Test if ScalarTraits<T> is defined on type T.
 template <class T>
@@ -219,12 +276,28 @@ public:
       (sizeof(test<ScalarTraits<T>>(nullptr, nullptr, nullptr)) == 1);
 };
 
-
-// Test if MappingTraits<T> is defined on type T.
+// Test if BlockScalarTraits<T> is defined on type T.
 template <class T>
-struct has_MappingTraits
+struct has_BlockScalarTraits
 {
-  typedef void (*Signature_mapping)(class IO&, T&);
+  typedef StringRef (*Signature_input)(StringRef, void *, T &);
+  typedef void (*Signature_output)(const T &, void *, llvm::raw_ostream &);
+
+  template <typename U>
+  static char test(SameType<Signature_input, &U::input> *,
+                   SameType<Signature_output, &U::output> *);
+
+  template <typename U>
+  static double test(...);
+
+public:
+  static bool const value =
+      (sizeof(test<BlockScalarTraits<T>>(nullptr, nullptr)) == 1);
+};
+
+// Test if MappingContextTraits<T> is defined on type T.
+template <class T, class Context> struct has_MappingTraits {
+  typedef void (*Signature_mapping)(class IO &, T &, Context &);
 
   template <typename U>
   static char test(SameType<Signature_mapping, &U::mapping>*);
@@ -233,14 +306,26 @@ struct has_MappingTraits
   static double test(...);
 
 public:
-  static bool const value = (sizeof(test<MappingTraits<T> >(nullptr)) == 1);
+  static bool const value =
+      (sizeof(test<MappingContextTraits<T, Context>>(nullptr)) == 1);
 };
 
-// Test if MappingTraits<T>::validate() is defined on type T.
-template <class T>
-struct has_MappingValidateTraits
-{
-  typedef StringRef (*Signature_validate)(class IO&, T&);
+// Test if MappingTraits<T> is defined on type T.
+template <class T> struct has_MappingTraits<T, EmptyContext> {
+  typedef void (*Signature_mapping)(class IO &, T &);
+
+  template <typename U>
+  static char test(SameType<Signature_mapping, &U::mapping> *);
+
+  template <typename U> static double test(...);
+
+public:
+  static bool const value = (sizeof(test<MappingTraits<T>>(nullptr)) == 1);
+};
+
+// Test if MappingContextTraits<T>::validate() is defined on type T.
+template <class T, class Context> struct has_MappingValidateTraits {
+  typedef StringRef (*Signature_validate)(class IO &, T &, Context &);
 
   template <typename U>
   static char test(SameType<Signature_validate, &U::validate>*);
@@ -249,10 +334,22 @@ struct has_MappingValidateTraits
   static double test(...);
 
 public:
-  static bool const value = (sizeof(test<MappingTraits<T> >(nullptr)) == 1);
+  static bool const value =
+      (sizeof(test<MappingContextTraits<T, Context>>(nullptr)) == 1);
 };
 
+// Test if MappingTraits<T>::validate() is defined on type T.
+template <class T> struct has_MappingValidateTraits<T, EmptyContext> {
+  typedef StringRef (*Signature_validate)(class IO &, T &);
 
+  template <typename U>
+  static char test(SameType<Signature_validate, &U::validate> *);
+
+  template <typename U> static double test(...);
+
+public:
+  static bool const value = (sizeof(test<MappingTraits<T>>(nullptr)) == 1);
+};
 
 // Test if SequenceTraits<T> is defined on type T.
 template <class T>
@@ -267,9 +364,25 @@ struct has_SequenceMethodTraits
   static double test(...);
 
 public:
-  static bool const value =  (sizeof(test<SequenceTraits<T> >(nullptr)) == 1);
+  static bool const value =  (sizeof(test<SequenceTraits<T>>(nullptr)) == 1);
 };
 
+// Test if CustomMappingTraits<T> is defined on type T.
+template <class T>
+struct has_CustomMappingTraits
+{
+  typedef void (*Signature_input)(IO &io, StringRef key, T &v);
+
+  template <typename U>
+  static char test(SameType<Signature_input, &U::inputOne>*);
+
+  template <typename U>
+  static double test(...);
+
+public:
+  static bool const value =
+      (sizeof(test<CustomMappingTraits<T>>(nullptr)) == 1);
+};
 
 // has_FlowTraits<int> will cause an error with some compilers because
 // it subclasses int.  Using this wrapper only instantiates the
@@ -300,13 +413,10 @@ public:
   static bool const value = sizeof(f<Derived>(nullptr)) == 2;
 };
 
-
-
 // Test if SequenceTraits<T> is defined on type T
 template<typename T>
 struct has_SequenceTraits : public std::integral_constant<bool,
                                       has_SequenceMethodTraits<T>::value > { };
-
 
 // Test if DocumentListTraits<T> is defined on type T
 template <class T>
@@ -321,7 +431,7 @@ struct has_DocumentListTraits
   static double test(...);
 
 public:
-  static bool const value = (sizeof(test<DocumentListTraits<T> >(nullptr))==1);
+  static bool const value = (sizeof(test<DocumentListTraits<T>>(nullptr))==1);
 };
 
 inline bool isNumber(StringRef S) {
@@ -400,29 +510,33 @@ inline bool needsQuotes(StringRef S) {
   return false;
 }
 
+template <typename T, typename Context>
+struct missingTraits
+    : public std::integral_constant<bool,
+                                    !has_ScalarEnumerationTraits<T>::value &&
+                                        !has_ScalarBitSetTraits<T>::value &&
+                                        !has_ScalarTraits<T>::value &&
+                                        !has_BlockScalarTraits<T>::value &&
+                                        !has_MappingTraits<T, Context>::value &&
+                                        !has_SequenceTraits<T>::value &&
+                                        !has_CustomMappingTraits<T>::value &&
+                                        !has_DocumentListTraits<T>::value> {};
 
-template<typename T>
-struct missingTraits : public std::integral_constant<bool,
-                                         !has_ScalarEnumerationTraits<T>::value
-                                      && !has_ScalarBitSetTraits<T>::value
-                                      && !has_ScalarTraits<T>::value
-                                      && !has_MappingTraits<T>::value
-                                      && !has_SequenceTraits<T>::value
-                                      && !has_DocumentListTraits<T>::value >  {};
+template <typename T, typename Context>
+struct validatedMappingTraits
+    : public std::integral_constant<
+          bool, has_MappingTraits<T, Context>::value &&
+                    has_MappingValidateTraits<T, Context>::value> {};
 
-template<typename T>
-struct validatedMappingTraits : public std::integral_constant<bool,
-                                       has_MappingTraits<T>::value
-                                    && has_MappingValidateTraits<T>::value> {};
+template <typename T, typename Context>
+struct unvalidatedMappingTraits
+    : public std::integral_constant<
+          bool, has_MappingTraits<T, Context>::value &&
+                    !has_MappingValidateTraits<T, Context>::value> {};
 
-template<typename T>
-struct unvalidatedMappingTraits : public std::integral_constant<bool,
-                                        has_MappingTraits<T>::value
-                                    && !has_MappingValidateTraits<T>::value> {};
 // Base class for Input and Output.
 class IO {
 public:
-
   IO(void *Ctxt=nullptr);
   virtual ~IO();
 
@@ -444,9 +558,14 @@ public:
   virtual void endMapping() = 0;
   virtual bool preflightKey(const char*, bool, bool, bool &, void *&) = 0;
   virtual void postflightKey(void*) = 0;
+  virtual std::vector<StringRef> keys() = 0;
+
+  virtual void beginFlowMapping() = 0;
+  virtual void endFlowMapping() = 0;
 
   virtual void beginEnumScalar() = 0;
   virtual bool matchEnumScalar(const char*, bool) = 0;
+  virtual bool matchEnumFallback() = 0;
   virtual void endEnumScalar() = 0;
 
   virtual bool beginBitSetScalar(bool &) = 0;
@@ -454,6 +573,7 @@ public:
   virtual void endBitSetScalar() = 0;
 
   virtual void scalarString(StringRef &, bool) = 0;
+  virtual void blockScalarString(StringRef &) = 0;
 
   virtual void setError(const Twine &) = 0;
 
@@ -469,6 +589,17 @@ public:
   void enumCase(T &Val, const char* Str, const uint32_t ConstVal) {
     if ( matchEnumScalar(Str, outputting() && Val == static_cast<T>(ConstVal)) ) {
       Val = ConstVal;
+    }
+  }
+
+  template <typename FBT, typename T>
+  void enumFallback(T &Val) {
+    if (matchEnumFallback()) {
+      EmptyContext Context;
+      // FIXME: Force integral conversion to allow strong typedefs to convert.
+      FBT Res = static_cast<typename FBT::BaseType>(Val);
+      yamlize(*this, Res, true, Context);
+      Val = static_cast<T>(static_cast<typename FBT::BaseType>(Res));
     }
   }
 
@@ -503,40 +634,58 @@ public:
   void *getContext();
   void setContext(void *);
 
-  template <typename T>
-  void mapRequired(const char* Key, T& Val) {
-    this->processKey(Key, Val, true);
+  template <typename T> void mapRequired(const char *Key, T &Val) {
+    EmptyContext Ctx;
+    this->processKey(Key, Val, true, Ctx);
+  }
+  template <typename T, typename Context>
+  void mapRequired(const char *Key, T &Val, Context &Ctx) {
+    this->processKey(Key, Val, true, Ctx);
+  }
+
+  template <typename T> void mapOptional(const char *Key, T &Val) {
+    EmptyContext Ctx;
+    mapOptionalWithContext(Key, Val, Ctx);
   }
 
   template <typename T>
-  typename std::enable_if<has_SequenceTraits<T>::value,void>::type
-  mapOptional(const char* Key, T& Val) {
+  void mapOptional(const char *Key, T &Val, const T &Default) {
+    EmptyContext Ctx;
+    mapOptionalWithContext(Key, Val, Default, Ctx);
+  }
+
+  template <typename T, typename Context>
+  typename std::enable_if<has_SequenceTraits<T>::value, void>::type
+  mapOptionalWithContext(const char *Key, T &Val, Context &Ctx) {
     // omit key/value instead of outputting empty sequence
-    if ( this->canElideEmptySequence() && !(Val.begin() != Val.end()) )
+    if (this->canElideEmptySequence() && !(Val.begin() != Val.end()))
       return;
-    this->processKey(Key, Val, false);
+    this->processKey(Key, Val, false, Ctx);
   }
 
-  template <typename T>
-  void mapOptional(const char* Key, Optional<T> &Val) {
-    processKeyWithDefault(Key, Val, Optional<T>(), /*Required=*/false);
+  template <typename T, typename Context>
+  void mapOptionalWithContext(const char *Key, Optional<T> &Val, Context &Ctx) {
+    this->processKeyWithDefault(Key, Val, Optional<T>(), /*Required=*/false,
+                                Ctx);
   }
 
-  template <typename T>
-  typename std::enable_if<!has_SequenceTraits<T>::value,void>::type
-  mapOptional(const char* Key, T& Val) {
-    this->processKey(Key, Val, false);
+  template <typename T, typename Context>
+  typename std::enable_if<!has_SequenceTraits<T>::value, void>::type
+  mapOptionalWithContext(const char *Key, T &Val, Context &Ctx) {
+    this->processKey(Key, Val, false, Ctx);
   }
 
-  template <typename T>
-  void mapOptional(const char* Key, T& Val, const T& Default) {
-    this->processKeyWithDefault(Key, Val, Default, false);
+  template <typename T, typename Context>
+  void mapOptionalWithContext(const char *Key, T &Val, const T &Default,
+                              Context &Ctx) {
+    this->processKeyWithDefault(Key, Val, Default, false, Ctx);
   }
-  
+
 private:
-  template <typename T>
+  template <typename T, typename Context>
   void processKeyWithDefault(const char *Key, Optional<T> &Val,
-                             const Optional<T> &DefaultValue, bool Required) {
+                             const Optional<T> &DefaultValue, bool Required,
+                             Context &Ctx) {
     assert(DefaultValue.hasValue() == false &&
            "Optional<T> shouldn't have a value!");
     void *SaveInfo;
@@ -546,7 +695,7 @@ private:
       Val = T();
     if (this->preflightKey(Key, Required, sameAsDefault, UseDefault,
                            SaveInfo)) {
-      yamlize(*this, Val.getValue(), Required);
+      yamlize(*this, Val.getValue(), Required, Ctx);
       this->postflightKey(SaveInfo);
     } else {
       if (UseDefault)
@@ -554,15 +703,15 @@ private:
     }
   }
 
-  template <typename T>
-  void processKeyWithDefault(const char *Key, T &Val, const T& DefaultValue,
-                                                                bool Required) {
+  template <typename T, typename Context>
+  void processKeyWithDefault(const char *Key, T &Val, const T &DefaultValue,
+                             bool Required, Context &Ctx) {
     void *SaveInfo;
     bool UseDefault;
     const bool sameAsDefault = outputting() && Val == DefaultValue;
     if ( this->preflightKey(Key, Required, sameAsDefault, UseDefault,
                                                                   SaveInfo) ) {
-      yamlize(*this, Val, Required);
+      yamlize(*this, Val, Required, Ctx);
       this->postflightKey(SaveInfo);
     }
     else {
@@ -571,12 +720,12 @@ private:
     }
   }
 
-  template <typename T>
-  void processKey(const char *Key, T &Val, bool Required) {
+  template <typename T, typename Context>
+  void processKey(const char *Key, T &Val, bool Required, Context &Ctx) {
     void *SaveInfo;
     bool UseDefault;
     if ( this->preflightKey(Key, Required, false, UseDefault, SaveInfo) ) {
-      yamlize(*this, Val, Required);
+      yamlize(*this, Val, Required, Ctx);
       this->postflightKey(SaveInfo);
     }
   }
@@ -585,19 +734,30 @@ private:
   void  *Ctxt;
 };
 
+namespace detail {
 
+template <typename T, typename Context>
+void doMapping(IO &io, T &Val, Context &Ctx) {
+  MappingContextTraits<T, Context>::mapping(io, Val, Ctx);
+}
 
-template<typename T>
-typename std::enable_if<has_ScalarEnumerationTraits<T>::value,void>::type
-yamlize(IO &io, T &Val, bool) {
+template <typename T> void doMapping(IO &io, T &Val, EmptyContext &Ctx) {
+  MappingTraits<T>::mapping(io, Val);
+}
+
+} // end namespace detail
+
+template <typename T>
+typename std::enable_if<has_ScalarEnumerationTraits<T>::value, void>::type
+yamlize(IO &io, T &Val, bool, EmptyContext &Ctx) {
   io.beginEnumScalar();
   ScalarEnumerationTraits<T>::enumeration(io, Val);
   io.endEnumScalar();
 }
 
-template<typename T>
-typename std::enable_if<has_ScalarBitSetTraits<T>::value,void>::type
-yamlize(IO &io, T &Val, bool) {
+template <typename T>
+typename std::enable_if<has_ScalarBitSetTraits<T>::value, void>::type
+yamlize(IO &io, T &Val, bool, EmptyContext &Ctx) {
   bool DoClear;
   if ( io.beginBitSetScalar(DoClear) ) {
     if ( DoClear )
@@ -607,10 +767,9 @@ yamlize(IO &io, T &Val, bool) {
   }
 }
 
-
-template<typename T>
-typename std::enable_if<has_ScalarTraits<T>::value,void>::type
-yamlize(IO &io, T &Val, bool) {
+template <typename T>
+typename std::enable_if<has_ScalarTraits<T>::value, void>::type
+yamlize(IO &io, T &Val, bool, EmptyContext &Ctx) {
   if ( io.outputting() ) {
     std::string Storage;
     llvm::raw_string_ostream Buffer(Storage);
@@ -628,11 +787,32 @@ yamlize(IO &io, T &Val, bool) {
   }
 }
 
+template <typename T>
+typename std::enable_if<has_BlockScalarTraits<T>::value, void>::type
+yamlize(IO &YamlIO, T &Val, bool, EmptyContext &Ctx) {
+  if (YamlIO.outputting()) {
+    std::string Storage;
+    llvm::raw_string_ostream Buffer(Storage);
+    BlockScalarTraits<T>::output(Val, YamlIO.getContext(), Buffer);
+    StringRef Str = Buffer.str();
+    YamlIO.blockScalarString(Str);
+  } else {
+    StringRef Str;
+    YamlIO.blockScalarString(Str);
+    StringRef Result =
+        BlockScalarTraits<T>::input(Str, YamlIO.getContext(), Val);
+    if (!Result.empty())
+      YamlIO.setError(llvm::Twine(Result));
+  }
+}
 
-template<typename T>
-typename std::enable_if<validatedMappingTraits<T>::value, void>::type
-yamlize(IO &io, T &Val, bool) {
-  io.beginMapping();
+template <typename T, typename Context>
+typename std::enable_if<validatedMappingTraits<T, Context>::value, void>::type
+yamlize(IO &io, T &Val, bool, Context &Ctx) {
+  if (has_FlowTraits<MappingTraits<T>>::value)
+    io.beginFlowMapping();
+  else
+    io.beginMapping();
   if (io.outputting()) {
     StringRef Err = MappingTraits<T>::validate(io, Val);
     if (!Err.empty()) {
@@ -640,39 +820,63 @@ yamlize(IO &io, T &Val, bool) {
       assert(Err.empty() && "invalid struct trying to be written as yaml");
     }
   }
-  MappingTraits<T>::mapping(io, Val);
+  detail::doMapping(io, Val, Ctx);
   if (!io.outputting()) {
     StringRef Err = MappingTraits<T>::validate(io, Val);
     if (!Err.empty())
       io.setError(Err);
   }
-  io.endMapping();
+  if (has_FlowTraits<MappingTraits<T>>::value)
+    io.endFlowMapping();
+  else
+    io.endMapping();
 }
 
-template<typename T>
-typename std::enable_if<unvalidatedMappingTraits<T>::value, void>::type
-yamlize(IO &io, T &Val, bool) {
-  io.beginMapping();
-  MappingTraits<T>::mapping(io, Val);
-  io.endMapping();
+template <typename T, typename Context>
+typename std::enable_if<unvalidatedMappingTraits<T, Context>::value, void>::type
+yamlize(IO &io, T &Val, bool, Context &Ctx) {
+  if (has_FlowTraits<MappingTraits<T>>::value) {
+    io.beginFlowMapping();
+    detail::doMapping(io, Val, Ctx);
+    io.endFlowMapping();
+  } else {
+    io.beginMapping();
+    detail::doMapping(io, Val, Ctx);
+    io.endMapping();
+  }
 }
 
-template<typename T>
-typename std::enable_if<missingTraits<T>::value, void>::type
-yamlize(IO &io, T &Val, bool) {
+template <typename T>
+typename std::enable_if<has_CustomMappingTraits<T>::value, void>::type
+yamlize(IO &io, T &Val, bool, EmptyContext &Ctx) {
+  if ( io.outputting() ) {
+    io.beginMapping();
+    CustomMappingTraits<T>::output(io, Val);
+    io.endMapping();
+  } else {
+    io.beginMapping();
+    for (StringRef key : io.keys())
+      CustomMappingTraits<T>::inputOne(io, key, Val);
+    io.endMapping();
+  }
+}
+
+template <typename T>
+typename std::enable_if<missingTraits<T, EmptyContext>::value, void>::type
+yamlize(IO &io, T &Val, bool, EmptyContext &Ctx) {
   char missing_yaml_trait_for_type[sizeof(MissingTrait<T>)];
 }
 
-template<typename T>
-typename std::enable_if<has_SequenceTraits<T>::value,void>::type
-yamlize(IO &io, T &Seq, bool) {
+template <typename T, typename Context>
+typename std::enable_if<has_SequenceTraits<T>::value, void>::type
+yamlize(IO &io, T &Seq, bool, Context &Ctx) {
   if ( has_FlowTraits< SequenceTraits<T> >::value ) {
     unsigned incnt = io.beginFlowSequence();
     unsigned count = io.outputting() ? SequenceTraits<T>::size(io, Seq) : incnt;
     for(unsigned i=0; i < count; ++i) {
       void *SaveInfo;
       if ( io.preflightFlowElement(i, SaveInfo) ) {
-        yamlize(io, SequenceTraits<T>::element(io, Seq, i), true);
+        yamlize(io, SequenceTraits<T>::element(io, Seq, i), true, Ctx);
         io.postflightFlowElement(SaveInfo);
       }
     }
@@ -684,14 +888,13 @@ yamlize(IO &io, T &Seq, bool) {
     for(unsigned i=0; i < count; ++i) {
       void *SaveInfo;
       if ( io.preflightElement(i, SaveInfo) ) {
-        yamlize(io, SequenceTraits<T>::element(io, Seq, i), true);
+        yamlize(io, SequenceTraits<T>::element(io, Seq, i), true, Ctx);
         io.postflightElement(SaveInfo);
       }
     }
     io.endSequence();
   }
 }
-
 
 template<>
 struct ScalarTraits<bool> {
@@ -706,7 +909,7 @@ struct ScalarTraits<StringRef> {
   static StringRef input(StringRef, void*, StringRef &);
   static bool mustQuote(StringRef S) { return needsQuotes(S); }
 };
- 
+
 template<>
 struct ScalarTraits<std::string> {
   static void output(const std::string &, void*, llvm::raw_ostream &);
@@ -784,7 +987,32 @@ struct ScalarTraits<double> {
   static bool mustQuote(StringRef) { return false; }
 };
 
+// For endian types, we just use the existing ScalarTraits for the underlying
+// type.  This way endian aware types are supported whenever a ScalarTraits
+// is defined for the underlying type.
+template <typename value_type, support::endianness endian, size_t alignment>
+struct ScalarTraits<support::detail::packed_endian_specific_integral<
+    value_type, endian, alignment>> {
+  typedef support::detail::packed_endian_specific_integral<value_type, endian,
+                                                           alignment>
+      endian_type;
 
+  static void output(const endian_type &E, void *Ctx,
+                     llvm::raw_ostream &Stream) {
+    ScalarTraits<value_type>::output(static_cast<value_type>(E), Ctx, Stream);
+  }
+
+  static StringRef input(StringRef Str, void *Ctx, endian_type &E) {
+    value_type V;
+    auto R = ScalarTraits<value_type>::input(Str, Ctx, V);
+    E = static_cast<endian_type>(V);
+    return R;
+  }
+
+  static bool mustQuote(StringRef Str) {
+    return ScalarTraits<value_type>::mustQuote(Str);
+  }
+};
 
 // Utility for use within MappingTraits<>::mapping() method
 // to [de]normalize an object for use with YAML conversion.
@@ -818,18 +1046,20 @@ private:
   TFinal       &Result;
 };
 
-
-
 // Utility for use within MappingTraits<>::mapping() method
 // to [de]normalize an object for use with YAML conversion.
 template <typename TNorm, typename TFinal>
 struct MappingNormalizationHeap {
-  MappingNormalizationHeap(IO &i_o, TFinal &Obj)
-    : io(i_o), BufPtr(NULL), Result(Obj) {
+  MappingNormalizationHeap(IO &i_o, TFinal &Obj,
+                           llvm::BumpPtrAllocator *allocator)
+    : io(i_o), BufPtr(nullptr), Result(Obj) {
     if ( io.outputting() ) {
       BufPtr = new (&Buffer) TNorm(io, Obj);
     }
-    else {
+    else if (allocator) {
+      BufPtr = allocator->Allocate<TNorm>();
+      new (BufPtr) TNorm(io);
+    } else {
       BufPtr = new TNorm(io);
     }
   }
@@ -854,8 +1084,6 @@ private:
   TFinal       &Result;
 };
 
-
-
 ///
 /// The Input class is used to parse a yaml document into in-memory structs
 /// and vectors.
@@ -877,7 +1105,7 @@ public:
         void *Ctxt = nullptr,
         SourceMgr::DiagHandlerTy DiagHandler = nullptr,
         void *DiagHandlerCtxt = nullptr);
-  ~Input();
+  ~Input() override;
 
   // Check if there was an syntax or semantic error during parsing.
   std::error_code error();
@@ -889,6 +1117,9 @@ private:
   void endMapping() override;
   bool preflightKey(const char *, bool, bool, bool &, void *&) override;
   void postflightKey(void *) override;
+  std::vector<StringRef> keys() override;
+  void beginFlowMapping() override;
+  void endFlowMapping() override;
   unsigned beginSequence() override;
   void endSequence() override;
   bool preflightElement(unsigned index, void *&) override;
@@ -899,19 +1130,23 @@ private:
   void endFlowSequence() override;
   void beginEnumScalar() override;
   bool matchEnumScalar(const char*, bool) override;
+  bool matchEnumFallback() override;
   void endEnumScalar() override;
   bool beginBitSetScalar(bool &) override;
   bool bitSetMatch(const char *, bool ) override;
   void endBitSetScalar() override;
   void scalarString(StringRef &, bool) override;
+  void blockScalarString(StringRef &) override;
   void setError(const Twine &message) override;
   bool canElideEmptySequence() override;
 
   class HNode {
     virtual void anchor();
+
   public:
     HNode(Node *n) : _node(n) { }
-    virtual ~HNode() { }
+    virtual ~HNode() = default;
+
     static inline bool classof(const HNode *) { return true; }
 
     Node *_node;
@@ -919,31 +1154,38 @@ private:
 
   class EmptyHNode : public HNode {
     void anchor() override;
+
   public:
     EmptyHNode(Node *n) : HNode(n) { }
+
     static inline bool classof(const HNode *n) {
       return NullNode::classof(n->_node);
     }
+
     static inline bool classof(const EmptyHNode *) { return true; }
   };
 
   class ScalarHNode : public HNode {
     void anchor() override;
+
   public:
     ScalarHNode(Node *n, StringRef s) : HNode(n), _value(s) { }
 
     StringRef value() const { return _value; }
 
     static inline bool classof(const HNode *n) {
-      return ScalarNode::classof(n->_node);
+      return ScalarNode::classof(n->_node) ||
+             BlockScalarNode::classof(n->_node);
     }
+
     static inline bool classof(const ScalarHNode *) { return true; }
+
   protected:
     StringRef _value;
   };
 
   class MapHNode : public HNode {
-    virtual void anchor();
+    void anchor() override;
 
   public:
     MapHNode(Node *n) : HNode(n) { }
@@ -951,18 +1193,17 @@ private:
     static inline bool classof(const HNode *n) {
       return MappingNode::classof(n->_node);
     }
+
     static inline bool classof(const MapHNode *) { return true; }
 
     typedef llvm::StringMap<std::unique_ptr<HNode>> NameToNode;
 
-    bool isValidKey(StringRef key);
-
     NameToNode                        Mapping;
-    llvm::SmallVector<const char*, 6> ValidKeys;
+    llvm::SmallVector<std::string, 6> ValidKeys;
   };
 
   class SequenceHNode : public HNode {
-    virtual void anchor();
+    void anchor() override;
 
   public:
     SequenceHNode(Node *n) : HNode(n) { }
@@ -970,6 +1211,7 @@ private:
     static inline bool classof(const HNode *n) {
       return SequenceNode::classof(n->_node);
     }
+
     static inline bool classof(const SequenceHNode *) { return true; }
 
     std::vector<std::unique_ptr<HNode>> Entries;
@@ -979,12 +1221,14 @@ private:
   void setError(HNode *hnode, const Twine &message);
   void setError(Node *node, const Twine &message);
 
-
 public:
   // These are only used by operator>>. They could be private
   // if those templated things could be made friends.
   bool setCurrentDocument();
   bool nextDocument();
+
+  /// Returns the current node that's being parsed by the YAML Parser.
+  const Node *getCurrentNode() const;
 
 private:
   llvm::SourceMgr                     SrcMgr; // must be before Strm
@@ -998,17 +1242,14 @@ private:
   bool                                ScalarMatchFound;
 };
 
-
-
-
 ///
 /// The Output class is used to generate a yaml document from in-memory structs
 /// and vectors.
 ///
 class Output : public IO {
 public:
-  Output(llvm::raw_ostream &, void *Ctxt=nullptr);
-  virtual ~Output();
+  Output(llvm::raw_ostream &, void *Ctxt = nullptr, int WrapColumn = 70);
+  ~Output() override;
 
   bool outputting() override;
   bool mapTag(StringRef, bool) override;
@@ -1016,6 +1257,9 @@ public:
   void endMapping() override;
   bool preflightKey(const char *key, bool, bool, bool &, void *&) override;
   void postflightKey(void *) override;
+  std::vector<StringRef> keys() override;
+  void beginFlowMapping() override;
+  void endFlowMapping() override;
   unsigned beginSequence() override;
   void endSequence() override;
   bool preflightElement(unsigned, void *&) override;
@@ -1026,14 +1270,16 @@ public:
   void endFlowSequence() override;
   void beginEnumScalar() override;
   bool matchEnumScalar(const char*, bool) override;
+  bool matchEnumFallback() override;
   void endEnumScalar() override;
   bool beginBitSetScalar(bool &) override;
   bool bitSetMatch(const char *, bool ) override;
   void endBitSetScalar() override;
   void scalarString(StringRef &, bool) override;
+  void blockScalarString(StringRef &) override;
   void setError(const Twine &message) override;
   bool canElideEmptySequence() override;
-public:
+
   // These are only used by operator<<. They could be private
   // if that templated operator could be made a friend.
   void beginDocuments();
@@ -1047,21 +1293,28 @@ private:
   void newLineCheck();
   void outputNewLine();
   void paddedKey(StringRef key);
+  void flowKey(StringRef Key);
 
-  enum InState { inSeq, inFlowSeq, inMapFirstKey, inMapOtherKey };
+  enum InState {
+    inSeq,
+    inFlowSeq,
+    inMapFirstKey,
+    inMapOtherKey,
+    inFlowMapFirstKey,
+    inFlowMapOtherKey
+  };
 
   llvm::raw_ostream       &Out;
+  int                      WrapColumn;
   SmallVector<InState, 8>  StateStack;
   int                      Column;
   int                      ColumnAtFlowStart;
+  int                      ColumnAtMapFlowStart;
   bool                     NeedBitValueComma;
   bool                     NeedFlowSequenceComma;
   bool                     EnumerationMatchFound;
   bool                     NeedsNewLine;
 };
-
-
-
 
 /// YAML I/O does conversion based on types. But often native data types
 /// are just a typedef of built in intergral types (e.g. int).  But the C++
@@ -1073,19 +1326,18 @@ private:
 /// Based on BOOST_STRONG_TYPEDEF
 #define LLVM_YAML_STRONG_TYPEDEF(_base, _type)                                 \
     struct _type {                                                             \
-        _type() { }                                                            \
-        _type(const _base v) : value(v) { }                                    \
-        _type(const _type &v) : value(v.value) {}                              \
-        _type &operator=(const _type &rhs) { value = rhs.value; return *this; }\
+        _type() = default;                                                     \
+        _type(const _base v) : value(v) {}                                     \
+        _type(const _type &v) = default;                                       \
+        _type &operator=(const _type &rhs) = default;                          \
         _type &operator=(const _base &rhs) { value = rhs; return *this; }      \
         operator const _base & () const { return value; }                      \
         bool operator==(const _type &rhs) const { return value == rhs.value; } \
         bool operator==(const _base &rhs) const { return value == rhs; }       \
         bool operator<(const _type &rhs) const { return value < rhs.value; }   \
         _base value;                                                           \
+        typedef _base BaseType;                                                \
     };
-
-
 
 ///
 /// Use these types instead of uintXX_t in any mapping to have
@@ -1095,7 +1347,6 @@ LLVM_YAML_STRONG_TYPEDEF(uint8_t, Hex8)
 LLVM_YAML_STRONG_TYPEDEF(uint16_t, Hex16)
 LLVM_YAML_STRONG_TYPEDEF(uint32_t, Hex32)
 LLVM_YAML_STRONG_TYPEDEF(uint64_t, Hex64)
-
 
 template<>
 struct ScalarTraits<Hex8> {
@@ -1125,15 +1376,15 @@ struct ScalarTraits<Hex64> {
   static bool mustQuote(StringRef) { return false; }
 };
 
-
 // Define non-member operator>> so that Input can stream in a document list.
 template <typename T>
 inline
 typename std::enable_if<has_DocumentListTraits<T>::value, Input &>::type
 operator>>(Input &yin, T &docList) {
   int i = 0;
+  EmptyContext Ctx;
   while ( yin.setCurrentDocument() ) {
-    yamlize(yin, DocumentListTraits<T>::element(yin, docList, i), true);
+    yamlize(yin, DocumentListTraits<T>::element(yin, docList, i), true, Ctx);
     if ( yin.error() )
       return yin;
     yin.nextDocument();
@@ -1144,11 +1395,12 @@ operator>>(Input &yin, T &docList) {
 
 // Define non-member operator>> so that Input can stream in a map as a document.
 template <typename T>
-inline
-typename std::enable_if<has_MappingTraits<T>::value, Input &>::type
+inline typename std::enable_if<has_MappingTraits<T, EmptyContext>::value,
+                               Input &>::type
 operator>>(Input &yin, T &docMap) {
+  EmptyContext Ctx;
   yin.setCurrentDocument();
-  yamlize(yin, docMap, true);
+  yamlize(yin, docMap, true, Ctx);
   return yin;
 }
 
@@ -1158,31 +1410,55 @@ template <typename T>
 inline
 typename std::enable_if<has_SequenceTraits<T>::value, Input &>::type
 operator>>(Input &yin, T &docSeq) {
+  EmptyContext Ctx;
   if (yin.setCurrentDocument())
-    yamlize(yin, docSeq, true);
+    yamlize(yin, docSeq, true, Ctx);
   return yin;
+}
+
+// Define non-member operator>> so that Input can stream in a block scalar.
+template <typename T>
+inline
+typename std::enable_if<has_BlockScalarTraits<T>::value, Input &>::type
+operator>>(Input &In, T &Val) {
+  EmptyContext Ctx;
+  if (In.setCurrentDocument())
+    yamlize(In, Val, true, Ctx);
+  return In;
+}
+
+// Define non-member operator>> so that Input can stream in a string map.
+template <typename T>
+inline
+typename std::enable_if<has_CustomMappingTraits<T>::value, Input &>::type
+operator>>(Input &In, T &Val) {
+  EmptyContext Ctx;
+  if (In.setCurrentDocument())
+    yamlize(In, Val, true, Ctx);
+  return In;
 }
 
 // Provide better error message about types missing a trait specialization
 template <typename T>
-inline
-typename std::enable_if<missingTraits<T>::value, Input &>::type
+inline typename std::enable_if<missingTraits<T, EmptyContext>::value,
+                               Input &>::type
 operator>>(Input &yin, T &docSeq) {
   char missing_yaml_trait_for_type[sizeof(MissingTrait<T>)];
   return yin;
 }
-
 
 // Define non-member operator<< so that Output can stream out document list.
 template <typename T>
 inline
 typename std::enable_if<has_DocumentListTraits<T>::value, Output &>::type
 operator<<(Output &yout, T &docList) {
+  EmptyContext Ctx;
   yout.beginDocuments();
   const size_t count = DocumentListTraits<T>::size(yout, docList);
   for(size_t i=0; i < count; ++i) {
     if ( yout.preflightDocument(i) ) {
-      yamlize(yout, DocumentListTraits<T>::element(yout, docList, i), true);
+      yamlize(yout, DocumentListTraits<T>::element(yout, docList, i), true,
+              Ctx);
       yout.postflightDocument();
     }
   }
@@ -1192,12 +1468,13 @@ operator<<(Output &yout, T &docList) {
 
 // Define non-member operator<< so that Output can stream out a map.
 template <typename T>
-inline
-typename std::enable_if<has_MappingTraits<T>::value, Output &>::type
+inline typename std::enable_if<has_MappingTraits<T, EmptyContext>::value,
+                               Output &>::type
 operator<<(Output &yout, T &map) {
+  EmptyContext Ctx;
   yout.beginDocuments();
   if ( yout.preflightDocument(0) ) {
-    yamlize(yout, map, true);
+    yamlize(yout, map, true, Ctx);
     yout.postflightDocument();
   }
   yout.endDocuments();
@@ -1209,88 +1486,140 @@ template <typename T>
 inline
 typename std::enable_if<has_SequenceTraits<T>::value, Output &>::type
 operator<<(Output &yout, T &seq) {
+  EmptyContext Ctx;
   yout.beginDocuments();
   if ( yout.preflightDocument(0) ) {
-    yamlize(yout, seq, true);
+    yamlize(yout, seq, true, Ctx);
     yout.postflightDocument();
   }
   yout.endDocuments();
   return yout;
 }
 
-// Provide better error message about types missing a trait specialization
+// Define non-member operator<< so that Output can stream out a block scalar.
 template <typename T>
 inline
-typename std::enable_if<missingTraits<T>::value, Output &>::type
+typename std::enable_if<has_BlockScalarTraits<T>::value, Output &>::type
+operator<<(Output &Out, T &Val) {
+  EmptyContext Ctx;
+  Out.beginDocuments();
+  if (Out.preflightDocument(0)) {
+    yamlize(Out, Val, true, Ctx);
+    Out.postflightDocument();
+  }
+  Out.endDocuments();
+  return Out;
+}
+
+// Define non-member operator<< so that Output can stream out a string map.
+template <typename T>
+inline
+typename std::enable_if<has_CustomMappingTraits<T>::value, Output &>::type
+operator<<(Output &Out, T &Val) {
+  EmptyContext Ctx;
+  Out.beginDocuments();
+  if (Out.preflightDocument(0)) {
+    yamlize(Out, Val, true, Ctx);
+    Out.postflightDocument();
+  }
+  Out.endDocuments();
+  return Out;
+}
+
+// Provide better error message about types missing a trait specialization
+template <typename T>
+inline typename std::enable_if<missingTraits<T, EmptyContext>::value,
+                               Output &>::type
 operator<<(Output &yout, T &seq) {
   char missing_yaml_trait_for_type[sizeof(MissingTrait<T>)];
   return yout;
 }
 
+template <typename T> struct SequenceTraitsImpl {
+  typedef typename T::value_type _type;
+  static size_t size(IO &io, T &seq) { return seq.size(); }
+  static _type &element(IO &io, T &seq, size_t index) {
+    if (index >= seq.size())
+      seq.resize(index + 1);
+    return seq[index];
+  }
+};
 
-} // namespace yaml
-} // namespace llvm
+/// Implementation of CustomMappingTraits for std::map<std::string, T>.
+template <typename T> struct StdMapStringCustomMappingTraitsImpl {
+  typedef std::map<std::string, T> map_type;
+  static void inputOne(IO &io, StringRef key, map_type &v) {
+    io.mapRequired(key.str().c_str(), v[key]);
+  }
+  static void output(IO &io, map_type &v) {
+    for (auto &p : v)
+      io.mapRequired(p.first.c_str(), p.second);
+  }
+};
 
+} // end namespace yaml
+} // end namespace llvm
 
 /// Utility for declaring that a std::vector of a particular type
 /// should be considered a YAML sequence.
-#define LLVM_YAML_IS_SEQUENCE_VECTOR(_type)                                 \
-  namespace llvm {                                                          \
-  namespace yaml {                                                          \
-    template<>                                                              \
-    struct SequenceTraits< std::vector<_type> > {                           \
-      static size_t size(IO &io, std::vector<_type> &seq) {                 \
-        return seq.size();                                                  \
-      }                                                                     \
-      static _type& element(IO &io, std::vector<_type> &seq, size_t index) {\
-        if ( index >= seq.size() )                                          \
-          seq.resize(index+1);                                              \
-        return seq[index];                                                  \
-      }                                                                     \
-    };                                                                      \
-  }                                                                         \
+#define LLVM_YAML_IS_SEQUENCE_VECTOR(_type)                                    \
+  namespace llvm {                                                             \
+  namespace yaml {                                                             \
+  template <>                                                                  \
+  struct SequenceTraits<std::vector<_type>>                                    \
+      : public SequenceTraitsImpl<std::vector<_type>> {};                      \
+  template <unsigned N>                                                        \
+  struct SequenceTraits<SmallVector<_type, N>>                                 \
+      : public SequenceTraitsImpl<SmallVector<_type, N>> {};                   \
+  }                                                                            \
   }
 
 /// Utility for declaring that a std::vector of a particular type
 /// should be considered a YAML flow sequence.
-#define LLVM_YAML_IS_FLOW_SEQUENCE_VECTOR(_type)                            \
-  namespace llvm {                                                          \
-  namespace yaml {                                                          \
-    template<>                                                              \
-    struct SequenceTraits< std::vector<_type> > {                           \
-      static size_t size(IO &io, std::vector<_type> &seq) {                 \
-        return seq.size();                                                  \
-      }                                                                     \
-      static _type& element(IO &io, std::vector<_type> &seq, size_t index) {\
-        (void)flow; /* Remove this workaround after PR17897 is fixed */     \
-        if ( index >= seq.size() )                                          \
-          seq.resize(index+1);                                              \
-        return seq[index];                                                  \
-      }                                                                     \
-      static const bool flow = true;                                        \
-    };                                                                      \
-  }                                                                         \
+/// We need to do a partial specialization on the vector version, not a full.
+/// If this is a full specialization, the compiler is a bit too "smart" and
+/// decides to warn on -Wunused-const-variable.  This workaround can be
+/// removed and we can do a full specialization on std::vector<T> once
+/// PR28878 is fixed.
+#define LLVM_YAML_IS_FLOW_SEQUENCE_VECTOR(_type)                               \
+  namespace llvm {                                                             \
+  namespace yaml {                                                             \
+  template <unsigned N>                                                        \
+  struct SequenceTraits<SmallVector<_type, N>>                                 \
+      : public SequenceTraitsImpl<SmallVector<_type, N>> {                     \
+    static const bool flow = true;                                             \
+  };                                                                           \
+  template <typename Allocator>                                                \
+  struct SequenceTraits<std::vector<_type, Allocator>>                         \
+      : public SequenceTraitsImpl<std::vector<_type, Allocator>> {             \
+    static const bool flow = true;                                             \
+  };                                                                           \
+  }                                                                            \
   }
 
 /// Utility for declaring that a std::vector of a particular type
 /// should be considered a YAML document list.
-#define LLVM_YAML_IS_DOCUMENT_LIST_VECTOR(_type)                            \
-  namespace llvm {                                                          \
-  namespace yaml {                                                          \
-    template<>                                                              \
-    struct DocumentListTraits< std::vector<_type> > {                       \
-      static size_t size(IO &io, std::vector<_type> &seq) {                 \
-        return seq.size();                                                  \
-      }                                                                     \
-      static _type& element(IO &io, std::vector<_type> &seq, size_t index) {\
-        if ( index >= seq.size() )                                          \
-          seq.resize(index+1);                                              \
-        return seq[index];                                                  \
-      }                                                                     \
-    };                                                                      \
-  }                                                                         \
+#define LLVM_YAML_IS_DOCUMENT_LIST_VECTOR(_type)                               \
+  namespace llvm {                                                             \
+  namespace yaml {                                                             \
+  template <unsigned N>                                                        \
+  struct DocumentListTraits<SmallVector<_type, N>>                             \
+      : public SequenceTraitsImpl<SmallVector<_type, N>> {};                   \
+  template <>                                                                  \
+  struct DocumentListTraits<std::vector<_type>>                                \
+      : public SequenceTraitsImpl<std::vector<_type>> {};                      \
+  }                                                                            \
   }
 
-
+/// Utility for declaring that std::map<std::string, _type> should be considered
+/// a YAML map.
+#define LLVM_YAML_IS_STRING_MAP(_type)                                         \
+  namespace llvm {                                                             \
+  namespace yaml {                                                             \
+  template <>                                                                  \
+  struct CustomMappingTraits<std::map<std::string, _type>>                     \
+      : public StdMapStringCustomMappingTraitsImpl<_type> {};                  \
+  }                                                                            \
+  }
 
 #endif // LLVM_SUPPORT_YAMLTRAITS_H

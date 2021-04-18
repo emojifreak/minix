@@ -32,16 +32,16 @@ class MipsAsmBackend : public MCAsmBackend {
   bool Is64Bit;  // 32 or 64 bit words
 
 public:
-  MipsAsmBackend(const Target &T, Triple::OSType _OSType, bool _isLittle,
-                 bool _is64Bit)
-      : MCAsmBackend(), OSType(_OSType), IsLittle(_isLittle),
-        Is64Bit(_is64Bit) {}
+  MipsAsmBackend(const Target &T, Triple::OSType OSType, bool IsLittle,
+                 bool Is64Bit)
+      : MCAsmBackend(), OSType(OSType), IsLittle(IsLittle), Is64Bit(Is64Bit) {}
 
-  MCObjectWriter *createObjectWriter(raw_ostream &OS) const override;
+  MCObjectWriter *createObjectWriter(raw_pwrite_stream &OS) const override;
 
   void applyFixup(const MCFixup &Fixup, char *Data, unsigned DataSize,
                   uint64_t Value, bool IsPCRel) const override;
 
+  Optional<MCFixupKind> getFixupKind(StringRef Name) const override;
   const MCFixupKindInfo &getFixupKindInfo(MCFixupKind Kind) const override;
 
   unsigned getNumFixupKinds() const override {
@@ -75,7 +75,8 @@ public:
   /// \param Inst - The instruction to relax, which may be the same
   /// as the output.
   /// \param [out] Res On return, the relaxed instruction.
-  void relaxInstruction(const MCInst &Inst, MCInst &Res) const override {}
+  void relaxInstruction(const MCInst &Inst, const MCSubtargetInfo &STI,
+                        MCInst &Res) const override {}
 
   /// @}
 

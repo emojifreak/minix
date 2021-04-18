@@ -41,7 +41,7 @@ char llvm::sys::DynamicLibrary::Invalid = 0;
 
 #else
 
-#if HAVE_DLFCN_H
+#if defined(HAVE_DLFCN_H) && defined(HAVE_DLOPEN)
 #include <dlfcn.h>
 using namespace llvm;
 using namespace llvm::sys;
@@ -119,7 +119,7 @@ void* DynamicLibrary::SearchForAddressOfSymbol(const char *symbolName) {
       return i->second;
   }
 
-#if HAVE_DLFCN_H
+#if defined(HAVE_DLFCN_H) && defined(HAVE_DLOPEN)
   // Now search the libraries.
   if (OpenedHandles) {
     for (DenseSet<void *>::iterator I = OpenedHandles->begin(),
@@ -178,3 +178,12 @@ void* DynamicLibrary::SearchForAddressOfSymbol(const char *symbolName) {
 LLVMBool LLVMLoadLibraryPermanently(const char* Filename) {
   return llvm::sys::DynamicLibrary::LoadLibraryPermanently(Filename);
 }
+
+void *LLVMSearchForAddressOfSymbol(const char *symbolName) {
+  return llvm::sys::DynamicLibrary::SearchForAddressOfSymbol(symbolName);
+}
+
+void LLVMAddSymbol(const char *symbolName, void *symbolValue) {
+  return llvm::sys::DynamicLibrary::AddSymbol(symbolName, symbolValue);
+}
+

@@ -771,7 +771,7 @@ struct A {
 };
 struct __declspec(dllexport) B : virtual A {
   virtual void f() = 0;
-  // MANGLING-DAG: @"\01??_7B@Test13@@6B@" = weak_odr dllexport unnamed_addr constant [1 x i8*] [i8* bitcast (void ()* @_purecall to i8*)]
+  // MANGLING-DAG: @"\01??_7B@Test13@@6B@" = weak_odr dllexport unnamed_addr constant { [1 x i8*] } { [1 x i8*] [i8* bitcast (void ()* @_purecall to i8*)] }
 };
 }
 
@@ -788,8 +788,8 @@ C::C() {}
 // CHECK-LABEL: VFTable for 'pr21031_1::B' in 'pr21031_1::C' (1 entry)
 // CHECK-NEXT:   0 | void pr21031_1::B::g()
 
-// MANGLING-DAG: @"\01??_7C@pr21031_1@@6BB@1@@" = {{.*}} constant [1 x i8*]
-// MANGLING-DAG: @"\01??_7C@pr21031_1@@6B@" = {{.*}} constant [1 x i8*]
+// MANGLING-DAG: @"\01??_7C@pr21031_1@@6BB@1@@" = {{.*}} constant { [1 x i8*] }
+// MANGLING-DAG: @"\01??_7C@pr21031_1@@6B@" = {{.*}} constant { [1 x i8*] }
 }
 
 namespace pr21031_2 {
@@ -804,6 +804,44 @@ C::C() {}
 // CHECK-LABEL: VFTable for 'pr21031_2::A' in 'pr21031_2::B' in 'pr21031_2::C' (1 entry)
 // CHECK-NEXT:   0 | void pr21031_2::A::f()
 
-// MANGLING-DAG: @"\01??_7C@pr21031_2@@6BA@1@@" = {{.*}} constant [1 x i8*]
-// MANGLING-DAG: @"\01??_7C@pr21031_2@@6BB@1@@" = {{.*}} constant [1 x i8*]
+// MANGLING-DAG: @"\01??_7C@pr21031_2@@6BA@1@@" = {{.*}} constant { [1 x i8*] }
+// MANGLING-DAG: @"\01??_7C@pr21031_2@@6BB@1@@" = {{.*}} constant { [1 x i8*] }
+}
+
+namespace pr21062_1 {
+struct A { virtual void f(); };
+struct B {};
+struct C : virtual B {};
+struct D : virtual C, virtual B, virtual A { D();};
+D::D() {}
+
+// CHECK-LABEL: VFTable for 'pr21062_1::A' in 'pr21062_1::D' (1 entry)
+// CHECK-NEXT:   0 | void pr21062_1::A::f()
+
+// MANGLING-DAG: @"\01??_7D@pr21062_1@@6B@" = {{.*}} constant { [1 x i8*] }
+}
+
+namespace pr21062_2 {
+struct A { virtual void f(); };
+struct B {};
+struct C : virtual B {};
+struct D : C, virtual B, virtual A { D(); };
+D::D() {}
+
+// CHECK-LABEL: VFTable for 'pr21062_2::A' in 'pr21062_2::D' (1 entry)
+// CHECK-NEXT:   0 | void pr21062_2::A::f()
+
+// MANGLING-DAG: @"\01??_7D@pr21062_2@@6B@" = {{.*}} constant { [1 x i8*] }
+}
+
+namespace pr21064 {
+struct A {};
+struct B { virtual void f(); };
+struct C : virtual A, virtual B {};
+struct D : virtual A, virtual C { D(); };
+D::D() {}
+// CHECK-LABEL: VFTable for 'pr21064::B' in 'pr21064::C' in 'pr21064::D' (1 entry)
+// CHECK-NEXT:   0 | void pr21064::B::f()
+
+// MANGLING-DAG: @"\01??_7D@pr21064@@6B@" = {{.*}} constant { [1 x i8*] }
 }

@@ -40,8 +40,8 @@ public:
                  const LangOptions &LangOpts,
                  DiagnosticOptions *DiagOpts);
 
-  virtual ~TextDiagnostic();
-  
+  ~TextDiagnostic() override;
+
   /// \brief Print the diagonstic level to a raw_ostream.
   ///
   /// This is a static helper that handles colorizing the level and formatting
@@ -107,6 +107,8 @@ protected:
                                   const SourceManager &SM) override;
 
 private:
+  void emitFilename(StringRef Filename, const SourceManager &SM);
+
   void emitSnippetAndCaret(SourceLocation Loc, DiagnosticsEngine::Level Level,
                            SmallVectorImpl<CharSourceRange>& Ranges,
                            ArrayRef<FixItHint> Hints,

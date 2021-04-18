@@ -11,18 +11,18 @@
 #include "clang/AST/ASTConsumer.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Frontend/ASTConsumers.h"
-#include "clang/Frontend/ASTUnit.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
+#include "clang/Frontend/MultiplexConsumer.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/Lex/HeaderSearch.h"
-#include "clang/Lex/Pragma.h"
 #include "clang/Lex/Preprocessor.h"
-#include "clang/Parse/Parser.h"
+#include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/ASTWriter.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
 #include <system_error>
@@ -47,8 +47,9 @@ void InitOnlyAction::ExecuteAction() {
 
 std::unique_ptr<ASTConsumer>
 ASTPrintAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
-  if (raw_ostream *OS = CI.createDefaultOutputFile(false, InFile))
-    return CreateASTPrinter(OS, CI.getFrontendOpts().ASTDumpFilter);
+  if (std::unique_ptr<raw_ostream> OS =
+          CI.createDefaultOutputFile(false, InFile))
+    return CreateASTPrinter(std::move(OS), CI.getFrontendOpts().ASTDumpFilter);
   return nullptr;
 }
 
@@ -79,52 +80,99 @@ std::unique_ptr<ASTConsumer>
 GeneratePCHAction::CreateASTConsumer(CompilerInstance &CI, StringRef InFile) {
   std::string Sysroot;
   std::string OutputFile;
-  raw_ostream *OS = nullptr;
-  if (ComputeASTConsumerArguments(CI, InFile, Sysroot, OutputFile, OS))
+  std::unique_ptr<raw_pwrite_stream> OS =
+      ComputeASTConsumerArguments(CI, InFile, Sysroot, OutputFile);
+  if (!OS)
     return nullptr;
 
   if (!CI.getFrontendOpts().RelocatablePCH)
     Sysroot.clear();
-  return llvm::make_unique<PCHGenerator>(CI.getPreprocessor(), OutputFile,
-                                         nullptr, Sysroot, OS);
+
+  auto Buffer = std::make_shared<PCHBuffer>();
+  std::vector<std::unique_ptr<ASTConsumer>> Consumers;
+  Consumers.push_back(llvm::make_unique<PCHGenerator>(
+                        CI.getPreprocessor(), OutputFile, Sysroot,
+                        Buffer, CI.getFrontendOpts().ModuleFileExtensions,
+                        /*AllowASTWithErrors*/false,
+                        /*IncludeTimestamps*/
+                          +CI.getFrontendOpts().IncludeTimestamps));
+  Consumers.push_back(CI.getPCHContainerWriter().CreatePCHContainerGenerator(
+      CI, InFile, OutputFile, std::move(OS), Buffer));
+
+  return llvm::make_unique<MultiplexConsumer>(std::move(Consumers));
 }
 
-bool GeneratePCHAction::ComputeASTConsumerArguments(CompilerInstance &CI,
-                                                    StringRef InFile,
-                                                    std::string &Sysroot,
-                                                    std::string &OutputFile,
-                                                    raw_ostream *&OS) {
+std::unique_ptr<raw_pwrite_stream>
+GeneratePCHAction::ComputeASTConsumerArguments(CompilerInstance &CI,
+                                               StringRef InFile,
+                                               std::string &Sysroot,
+                                               std::string &OutputFile) {
   Sysroot = CI.getHeaderSearchOpts().Sysroot;
   if (CI.getFrontendOpts().RelocatablePCH && Sysroot.empty()) {
     CI.getDiagnostics().Report(diag::err_relocatable_without_isysroot);
-    return true;
+    return nullptr;
   }
 
   // We use createOutputFile here because this is exposed via libclang, and we
   // must disable the RemoveFileOnSignal behavior.
   // We use a temporary to avoid race conditions.
-  OS = CI.createOutputFile(CI.getFrontendOpts().OutputFile, /*Binary=*/true,
-                           /*RemoveFileOnSignal=*/false, InFile,
-                           /*Extension=*/"", /*useTemporary=*/true);
+  std::unique_ptr<raw_pwrite_stream> OS =
+      CI.createOutputFile(CI.getFrontendOpts().OutputFile, /*Binary=*/true,
+                          /*RemoveFileOnSignal=*/false, InFile,
+                          /*Extension=*/"", /*useTemporary=*/true);
   if (!OS)
-    return true;
+    return nullptr;
 
   OutputFile = CI.getFrontendOpts().OutputFile;
-  return false;
+  return OS;
+}
+
+bool GeneratePCHAction::BeginSourceFileAction(CompilerInstance &CI,
+                                              StringRef Filename) {
+  CI.getLangOpts().CompilingPCH = true;
+  return true;
 }
 
 std::unique_ptr<ASTConsumer>
 GenerateModuleAction::CreateASTConsumer(CompilerInstance &CI,
                                         StringRef InFile) {
-  std::string Sysroot;
-  std::string OutputFile;
-  raw_ostream *OS = nullptr;
-  if (ComputeASTConsumerArguments(CI, InFile, Sysroot, OutputFile, OS))
+  std::unique_ptr<raw_pwrite_stream> OS = CreateOutputFile(CI, InFile);
+  if (!OS)
     return nullptr;
 
-  return llvm::make_unique<PCHGenerator>(CI.getPreprocessor(), OutputFile,
-                                         Module, Sysroot, OS);
+  std::string OutputFile = CI.getFrontendOpts().OutputFile;
+  std::string Sysroot;
+
+  auto Buffer = std::make_shared<PCHBuffer>();
+  std::vector<std::unique_ptr<ASTConsumer>> Consumers;
+
+  Consumers.push_back(llvm::make_unique<PCHGenerator>(
+                        CI.getPreprocessor(), OutputFile, Sysroot,
+                        Buffer, CI.getFrontendOpts().ModuleFileExtensions,
+                        /*AllowASTWithErrors=*/false,
+                        /*IncludeTimestamps=*/
+                          +CI.getFrontendOpts().BuildingImplicitModule));
+  Consumers.push_back(CI.getPCHContainerWriter().CreatePCHContainerGenerator(
+      CI, InFile, OutputFile, std::move(OS), Buffer));
+  return llvm::make_unique<MultiplexConsumer>(std::move(Consumers));
 }
+
+bool GenerateModuleAction::BeginSourceFileAction(CompilerInstance &CI, 
+                                                 StringRef Filename) {
+  // Set up embedding for any specified files. Do this before we load any
+  // source files, including the primary module map for the compilation.
+  for (const auto &F : CI.getFrontendOpts().ModulesEmbedFiles) {
+    if (const auto *FE = CI.getFileManager().getFile(F, /*openFile*/true))
+      CI.getSourceManager().setFileIsTransient(FE);
+    else
+      CI.getDiagnostics().Report(diag::err_modules_embed_file_not_found) << F;
+  }
+  if (CI.getFrontendOpts().ModulesEmbedAllFiles)
+    CI.getSourceManager().setAllFilesAreTransient(true);
+
+  return true;
+}
+
 
 static SmallVectorImpl<char> &
 operator+=(SmallVectorImpl<char> &Includes, StringRef RHS) {
@@ -132,10 +180,10 @@ operator+=(SmallVectorImpl<char> &Includes, StringRef RHS) {
   return Includes;
 }
 
-static std::error_code addHeaderInclude(StringRef HeaderName,
-                                        SmallVectorImpl<char> &Includes,
-                                        const LangOptions &LangOpts,
-                                        bool IsExternC) {
+static void addHeaderInclude(StringRef HeaderName,
+                             SmallVectorImpl<char> &Includes,
+                             const LangOptions &LangOpts,
+                             bool IsExternC) {
   if (IsExternC && LangOpts.CPlusPlus)
     Includes += "extern \"C\" {\n";
   if (LangOpts.ObjC1)
@@ -148,23 +196,6 @@ static std::error_code addHeaderInclude(StringRef HeaderName,
   Includes += "\"\n";
   if (IsExternC && LangOpts.CPlusPlus)
     Includes += "}\n";
-  return std::error_code();
-}
-
-static std::error_code addHeaderInclude(const FileEntry *Header,
-                                        SmallVectorImpl<char> &Includes,
-                                        const LangOptions &LangOpts,
-                                        bool IsExternC) {
-  // Use an absolute path if we don't have a filename as written in the module
-  // map file; this ensures that we will identify the right file independent of
-  // header search paths.
-  if (llvm::sys::path::is_absolute(Header->getName()))
-    return addHeaderInclude(Header->getName(), Includes, LangOpts, IsExternC);
-
-  SmallString<256> AbsName(Header->getName());
-  if (std::error_code Err = llvm::sys::fs::make_absolute(AbsName))
-    return Err;
-  return addHeaderInclude(AbsName, Includes, LangOpts, IsExternC);
 }
 
 /// \brief Collect the set of header includes needed to construct the given 
@@ -183,43 +214,41 @@ collectModuleHeaderIncludes(const LangOptions &LangOpts, FileManager &FileMgr,
     return std::error_code();
 
   // Add includes for each of these headers.
-  for (Module::Header &H : Module->Headers[Module::HK_Normal]) {
-    Module->addTopHeader(H.Entry);
-    // Use the path as specified in the module map file. We'll look for this
-    // file relative to the module build directory (the directory containing
-    // the module map file) so this will find the same file that we found
-    // while parsing the module map.
-    if (std::error_code Err = addHeaderInclude(H.NameAsWritten, Includes,
-                                               LangOpts, Module->IsExternC))
-      return Err;
+  for (auto HK : {Module::HK_Normal, Module::HK_Private}) {
+    for (Module::Header &H : Module->Headers[HK]) {
+      Module->addTopHeader(H.Entry);
+      // Use the path as specified in the module map file. We'll look for this
+      // file relative to the module build directory (the directory containing
+      // the module map file) so this will find the same file that we found
+      // while parsing the module map.
+      addHeaderInclude(H.NameAsWritten, Includes, LangOpts, Module->IsExternC);
+    }
   }
   // Note that Module->PrivateHeaders will not be a TopHeader.
 
-  if (const FileEntry *UmbrellaHeader = Module->getUmbrellaHeader()) {
-    // FIXME: Track the name as written here.
-    Module->addTopHeader(UmbrellaHeader);
-    if (Module->Parent) {
+  if (Module::Header UmbrellaHeader = Module->getUmbrellaHeader()) {
+    Module->addTopHeader(UmbrellaHeader.Entry);
+    if (Module->Parent)
       // Include the umbrella header for submodules.
-      if (std::error_code Err = addHeaderInclude(UmbrellaHeader, Includes,
-                                                 LangOpts, Module->IsExternC))
-        return Err;
-    }
-  } else if (const DirectoryEntry *UmbrellaDir = Module->getUmbrellaDir()) {
+      addHeaderInclude(UmbrellaHeader.NameAsWritten, Includes, LangOpts,
+                       Module->IsExternC);
+  } else if (Module::DirectoryName UmbrellaDir = Module->getUmbrellaDir()) {
     // Add all of the headers we find in this subdirectory.
     std::error_code EC;
     SmallString<128> DirNative;
-    llvm::sys::path::native(UmbrellaDir->getName(), DirNative);
-    for (llvm::sys::fs::recursive_directory_iterator Dir(DirNative.str(), EC), 
-                                                     DirEnd;
-         Dir != DirEnd && !EC; Dir.increment(EC)) {
+    llvm::sys::path::native(UmbrellaDir.Entry->getName(), DirNative);
+
+    vfs::FileSystem &FS = *FileMgr.getVirtualFileSystem();
+    for (vfs::recursive_directory_iterator Dir(FS, DirNative, EC), End;
+         Dir != End && !EC; Dir.increment(EC)) {
       // Check whether this entry has an extension typically associated with 
       // headers.
-      if (!llvm::StringSwitch<bool>(llvm::sys::path::extension(Dir->path()))
+      if (!llvm::StringSwitch<bool>(llvm::sys::path::extension(Dir->getName()))
           .Cases(".h", ".H", ".hh", ".hpp", true)
           .Default(false))
         continue;
 
-      const FileEntry *Header = FileMgr.getFile(Dir->path());
+      const FileEntry *Header = FileMgr.getFile(Dir->getName());
       // FIXME: This shouldn't happen unless there is a file system race. Is
       // that worth diagnosing?
       if (!Header)
@@ -230,12 +259,19 @@ collectModuleHeaderIncludes(const LangOptions &LangOpts, FileManager &FileMgr,
       if (ModMap.isHeaderUnavailableInModule(Header, Module))
         continue;
 
+      // Compute the relative path from the directory to this file.
+      SmallVector<StringRef, 16> Components;
+      auto PathIt = llvm::sys::path::rbegin(Dir->getName());
+      for (int I = 0; I != Dir.level() + 1; ++I, ++PathIt)
+        Components.push_back(*PathIt);
+      SmallString<128> RelativeHeader(UmbrellaDir.NameAsWritten);
+      for (auto It = Components.rbegin(), End = Components.rend(); It != End;
+           ++It)
+        llvm::sys::path::append(RelativeHeader, *It);
+
       // Include this header as part of the umbrella directory.
-      // FIXME: Track the name as written through to here.
       Module->addTopHeader(Header);
-      if (std::error_code Err =
-              addHeaderInclude(Header, Includes, LangOpts, Module->IsExternC))
-        return Err;
+      addHeaderInclude(RelativeHeader, Includes, LangOpts, Module->IsExternC);
     }
 
     if (EC)
@@ -253,10 +289,16 @@ collectModuleHeaderIncludes(const LangOptions &LangOpts, FileManager &FileMgr,
   return std::error_code();
 }
 
-bool GenerateModuleAction::BeginSourceFileAction(CompilerInstance &CI, 
-                                                 StringRef Filename) {
-  // Find the module map file.  
-  const FileEntry *ModuleMap = CI.getFileManager().getFile(Filename);
+bool GenerateModuleFromModuleMapAction::BeginSourceFileAction(
+    CompilerInstance &CI, StringRef Filename) {
+  CI.getLangOpts().setCompilingModule(LangOptions::CMK_ModuleMap);
+
+  if (!GenerateModuleAction::BeginSourceFileAction(CI, Filename))
+    return false;
+
+  // Find the module map file.
+  const FileEntry *ModuleMap =
+      CI.getFileManager().getFile(Filename, /*openFile*/true);
   if (!ModuleMap)  {
     CI.getDiagnostics().Report(diag::err_module_map_not_found)
       << Filename;
@@ -326,12 +368,10 @@ bool GenerateModuleAction::BeginSourceFileAction(CompilerInstance &CI,
   // Collect the set of #includes we need to build the module.
   SmallString<256> HeaderContents;
   std::error_code Err = std::error_code();
-  if (const FileEntry *UmbrellaHeader = Module->getUmbrellaHeader())
-    // FIXME: Track the file name as written.
-    Err = addHeaderInclude(UmbrellaHeader, HeaderContents, CI.getLangOpts(),
-                           Module->IsExternC);
-  if (!Err)
-    Err = collectModuleHeaderIncludes(
+  if (Module::Header UmbrellaHeader = Module->getUmbrellaHeader())
+    addHeaderInclude(UmbrellaHeader.NameAsWritten, HeaderContents,
+                     CI.getLangOpts(), Module->IsExternC);
+  Err = collectModuleHeaderIncludes(
         CI.getLangOpts(), FileMgr,
         CI.getPreprocessor().getHeaderSearchInfo().getModuleMap(), Module,
         HeaderContents);
@@ -355,32 +395,47 @@ bool GenerateModuleAction::BeginSourceFileAction(CompilerInstance &CI,
   return true;
 }
 
-bool GenerateModuleAction::ComputeASTConsumerArguments(CompilerInstance &CI,
-                                                       StringRef InFile,
-                                                       std::string &Sysroot,
-                                                       std::string &OutputFile,
-                                                       raw_ostream *&OS) {
+std::unique_ptr<raw_pwrite_stream>
+GenerateModuleFromModuleMapAction::CreateOutputFile(CompilerInstance &CI,
+                                                    StringRef InFile) {
   // If no output file was provided, figure out where this module would go
   // in the module cache.
   if (CI.getFrontendOpts().OutputFile.empty()) {
     HeaderSearch &HS = CI.getPreprocessor().getHeaderSearchInfo();
     CI.getFrontendOpts().OutputFile =
         HS.getModuleFileName(CI.getLangOpts().CurrentModule,
-                             ModuleMapForUniquing->getName());
+                             ModuleMapForUniquing->getName(),
+                             /*UsePrebuiltPath=*/false);
   }
-  
+
   // We use createOutputFile here because this is exposed via libclang, and we
   // must disable the RemoveFileOnSignal behavior.
   // We use a temporary to avoid race conditions.
-  OS = CI.createOutputFile(CI.getFrontendOpts().OutputFile, /*Binary=*/true,
-                           /*RemoveFileOnSignal=*/false, InFile,
-                           /*Extension=*/"", /*useTemporary=*/true,
-                           /*CreateMissingDirectories=*/true);
-  if (!OS)
-    return true;
-  
-  OutputFile = CI.getFrontendOpts().OutputFile;
-  return false;
+  return CI.createOutputFile(CI.getFrontendOpts().OutputFile, /*Binary=*/true,
+                             /*RemoveFileOnSignal=*/false, InFile,
+                             /*Extension=*/"", /*useTemporary=*/true,
+                             /*CreateMissingDirectories=*/true);
+}
+
+bool GenerateModuleInterfaceAction::BeginSourceFileAction(CompilerInstance &CI,
+                                                          StringRef Filename) {
+  if (!CI.getLangOpts().ModulesTS) {
+    CI.getDiagnostics().Report(diag::err_module_interface_requires_modules_ts);
+    return false;
+  }
+
+  CI.getLangOpts().setCompilingModule(LangOptions::CMK_ModuleInterface);
+
+  return GenerateModuleAction::BeginSourceFileAction(CI, Filename);
+}
+
+std::unique_ptr<raw_pwrite_stream>
+GenerateModuleInterfaceAction::CreateOutputFile(CompilerInstance &CI,
+                                                StringRef InFile) {
+  return CI.createDefaultOutputFile(/*Binary=*/true, InFile, "pcm");
+}
+
+SyntaxOnlyAction::~SyntaxOnlyAction() {
 }
 
 std::unique_ptr<ASTConsumer>
@@ -403,13 +458,14 @@ void VerifyPCHAction::ExecuteAction() {
   CompilerInstance &CI = getCompilerInstance();
   bool Preamble = CI.getPreprocessorOpts().PrecompiledPreambleBytes.first != 0;
   const std::string &Sysroot = CI.getHeaderSearchOpts().Sysroot;
-  std::unique_ptr<ASTReader> Reader(
-      new ASTReader(CI.getPreprocessor(), CI.getASTContext(),
-                    Sysroot.empty() ? "" : Sysroot.c_str(),
-                    /*DisableValidation*/ false,
-                    /*AllowPCHWithCompilerErrors*/ false,
-                    /*AllowConfigurationMismatch*/ true,
-                    /*ValidateSystemInputs*/ true));
+  std::unique_ptr<ASTReader> Reader(new ASTReader(
+      CI.getPreprocessor(), CI.getASTContext(), CI.getPCHContainerReader(),
+      CI.getFrontendOpts().ModuleFileExtensions,
+      Sysroot.empty() ? "" : Sysroot.c_str(),
+      /*DisableValidation*/ false,
+      /*AllowPCHWithCompilerErrors*/ false,
+      /*AllowConfigurationMismatch*/ true,
+      /*ValidateSystemInputs*/ true));
 
   Reader->ReadAST(getCurrentFile(),
                   Preamble ? serialization::MK_Preamble
@@ -459,11 +515,18 @@ namespace {
 #define BENIGN_LANGOPT(Name, Bits, Default, Description)
 #define BENIGN_ENUM_LANGOPT(Name, Type, Bits, Default, Description)
 #include "clang/Basic/LangOptions.def"
+
+      if (!LangOpts.ModuleFeatures.empty()) {
+        Out.indent(4) << "Module features:\n";
+        for (StringRef Feature : LangOpts.ModuleFeatures)
+          Out.indent(6) << Feature << "\n";
+      }
+
       return false;
     }
 
-    bool ReadTargetOptions(const TargetOptions &TargetOpts,
-                           bool Complain) override {
+    bool ReadTargetOptions(const TargetOptions &TargetOpts, bool Complain,
+                           bool AllowCompatibleDifferences) override {
       Out.indent(2) << "Target options:\n";
       Out.indent(4) << "  Triple: " << TargetOpts.Triple << "\n";
       Out.indent(4) << "  CPU: " << TargetOpts.CPU << "\n";
@@ -480,9 +543,8 @@ namespace {
       return false;
     }
 
-    virtual bool
-    ReadDiagnosticOptions(IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts,
-                          bool Complain) override {
+    bool ReadDiagnosticOptions(IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts,
+                               bool Complain) override {
       Out.indent(2) << "Diagnostic options:\n";
 #define DIAGOPT(Name, Bits, Default) DUMP_BOOLEAN(DiagOpts->Name, #Name);
 #define ENUM_DIAGOPT(Name, Type, Bits, Default) \
@@ -501,9 +563,11 @@ namespace {
     }
 
     bool ReadHeaderSearchOptions(const HeaderSearchOptions &HSOpts,
+                                 StringRef SpecificModuleCachePath,
                                  bool Complain) override {
       Out.indent(2) << "Header search options:\n";
       Out.indent(4) << "System root [-isysroot=]: '" << HSOpts.Sysroot << "'\n";
+      Out.indent(4) << "Module Cache: '" << SpecificModuleCachePath << "'\n";
       DUMP_BOOLEAN(HSOpts.UseBuiltinIncludes,
                    "Use builtin include directories [-nobuiltininc]");
       DUMP_BOOLEAN(HSOpts.UseStandardSystemIncludes,
@@ -540,8 +604,29 @@ namespace {
       }
       return false;
     }
+
+    /// Indicates that a particular module file extension has been read.
+    void readModuleFileExtension(
+           const ModuleFileExtensionMetadata &Metadata) override {
+      Out.indent(2) << "Module file extension '"
+                    << Metadata.BlockName << "' " << Metadata.MajorVersion
+                    << "." << Metadata.MinorVersion;
+      if (!Metadata.UserInfo.empty()) {
+        Out << ": ";
+        Out.write_escaped(Metadata.UserInfo);
+      }
+
+      Out << "\n";
+    }
 #undef DUMP_BOOLEAN
   };
+}
+
+bool DumpModuleInfoAction::BeginInvocation(CompilerInstance &CI) {
+  // The Object file reader also supports raw ast files and there is no point in
+  // being strict about the module file format in -module-file-info mode.
+  CI.getHeaderSearchOpts().ModuleFormat = "obj";
+  return true;
 }
 
 void DumpModuleInfoAction::ExecuteAction() {
@@ -556,10 +641,21 @@ void DumpModuleInfoAction::ExecuteAction() {
   llvm::raw_ostream &Out = OutFile.get()? *OutFile.get() : llvm::outs();
 
   Out << "Information for module file '" << getCurrentFile() << "':\n";
+  auto &FileMgr = getCompilerInstance().getFileManager();
+  auto Buffer = FileMgr.getBufferForFile(getCurrentFile());
+  StringRef Magic = (*Buffer)->getMemBufferRef().getBuffer();
+  bool IsRaw = (Magic.size() >= 4 && Magic[0] == 'C' && Magic[1] == 'P' &&
+                Magic[2] == 'C' && Magic[3] == 'H');
+  Out << "  Module format: " << (IsRaw ? "raw" : "obj") << "\n";
+
+  Preprocessor &PP = getCompilerInstance().getPreprocessor();
   DumpModuleInfoListener Listener(Out);
-  ASTReader::readASTFileControlBlock(getCurrentFile(),
-                                     getCompilerInstance().getFileManager(),
-                                     Listener);
+  HeaderSearchOptions &HSOpts =
+      PP.getHeaderSearchInfo().getHeaderSearchOpts();
+  ASTReader::readASTFileControlBlock(
+      getCurrentFile(), FileMgr, getCompilerInstance().getPCHContainerReader(),
+      /*FindModuleFileExtensions=*/true, Listener,
+      HSOpts.ModulesValidateDiagnosticOptions);
 }
 
 //===----------------------------------------------------------------------===//
@@ -598,17 +694,12 @@ void DumpTokensAction::ExecuteAction() {
 
 void GeneratePTHAction::ExecuteAction() {
   CompilerInstance &CI = getCompilerInstance();
-  if (CI.getFrontendOpts().OutputFile.empty() ||
-      CI.getFrontendOpts().OutputFile == "-") {
-    // FIXME: Don't fail this way.
-    // FIXME: Verify that we can actually seek in the given file.
-    llvm::report_fatal_error("PTH requires a seekable file for output!");
-  }
-  llvm::raw_fd_ostream *OS =
-    CI.createDefaultOutputFile(true, getCurrentFile());
-  if (!OS) return;
+  std::unique_ptr<raw_pwrite_stream> OS =
+      CI.createDefaultOutputFile(true, getCurrentFile());
+  if (!OS)
+    return;
 
-  CacheTokens(CI.getPreprocessor(), OS);
+  CacheTokens(CI.getPreprocessor(), OS.get());
 }
 
 void PreprocessOnlyAction::ExecuteAction() {
@@ -664,14 +755,16 @@ void PrintPreprocessedAction::ExecuteAction() {
       } else if (*cur == 0x0A)  // LF
         break;
 
-      ++cur, ++next;
+      ++cur;
+      ++next;
     }
   }
 
-  raw_ostream *OS = CI.createDefaultOutputFile(BinaryMode, getCurrentFile());
+  std::unique_ptr<raw_ostream> OS =
+      CI.createDefaultOutputFile(BinaryMode, getCurrentFile());
   if (!OS) return;
 
-  DoPrintPreprocessedInput(CI.getPreprocessor(), OS,
+  DoPrintPreprocessedInput(CI.getPreprocessor(), OS.get(),
                            CI.getPreprocessorOutputOpts());
 }
 
@@ -688,11 +781,13 @@ void PrintPreambleAction::ExecuteAction() {
   case IK_None:
   case IK_Asm:
   case IK_PreprocessedC:
+  case IK_PreprocessedCuda:
   case IK_PreprocessedCXX:
   case IK_PreprocessedObjC:
   case IK_PreprocessedObjCXX:
   case IK_AST:
   case IK_LLVM_IR:
+  case IK_RenderScript:
     // We can't do anything with these.
     return;
   }

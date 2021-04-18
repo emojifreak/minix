@@ -1,4 +1,4 @@
-; RUN: opt -basicaa -gvn -S < %s | FileCheck %s
+; RUN: opt -tbaa -basicaa -gvn -S < %s | FileCheck %s
 
 define i32 @test1(i8* %p, i8* %q) {
 ; CHECK: @test1(i8* %p, i8* %q)
@@ -72,6 +72,37 @@ define i32 @test7(i8* %p, i8* %q) {
   ret i32 %c
 }
 
+
+
+define i32 @test8(i32* %p, i32* %q) {
+; CHECK-LABEL: test8
+; CHECK-NEXT: store i32 15, i32* %p
+; CHECK-NEXT: ret i32 0
+; Since we know the location is invariant, we can forward the
+; load across the potentially aliasing store.
+
+  %a = load i32, i32* %q, !tbaa !10
+  store i32 15, i32* %p
+  %b = load i32, i32* %q, !tbaa !10
+  %c = sub i32 %a, %b
+  ret i32 %c
+}
+define i32 @test9(i32* %p, i32* %q) {
+; CHECK-LABEL: test9
+; CHECK-NEXT: call void @clobber()
+; CHECK-NEXT: ret i32 0
+; Since we know the location is invariant, we can forward the
+; load across the potentially aliasing store (within the call).
+
+  %a = load i32, i32* %q, !tbaa !10
+  call void @clobber()
+  %b = load i32, i32* %q, !tbaa !10
+  %c = sub i32 %a, %b
+  ret i32 %c
+}
+
+
+declare void @clobber()
 declare i32 @foo(i8*) readonly
 
 ; CHECK: [[TAGC]] = !{[[TYPEC:!.*]], [[TYPEC]], i64 0}
@@ -82,10 +113,17 @@ declare i32 @foo(i8*) readonly
 ; CHECK: [[TAGA]] = !{[[TYPEA]], [[TYPEA]], i64 0}
 !0 = !{!5, !5, i64 0}
 !1 = !{!6, !6, i64 0}
-!2 = !{!"tbaa root", null}
+!2 = !{!"tbaa root"}
 !3 = !{!7, !7, i64 0}
-!4 = !{!8, !8, i64 0}
+!4 = !{!11, !11, i64 0}
 !5 = !{!"C", !6}
 !6 = !{!"A", !2}
 !7 = !{!"B", !6}
-!8 = !{!"another root", null}
+!8 = !{!"another root"}
+!11 = !{!"scalar type", !8}
+
+
+;; A TBAA structure who's only point is to have a constant location
+!9 = !{!"yet another root"}
+!10 = !{!"node", !9, i64 1}
+

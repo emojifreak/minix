@@ -53,16 +53,17 @@ namespace InhCtor {
   int n = b.T(); // expected-error {{'T' is a protected member of 'InhCtor::A'}}
                  // expected-note@-15 {{declared protected here}}
 
+  // FIXME: EDG and GCC reject this too, but it's not clear why it would be
+  // ill-formed.
   template<typename T>
   struct S : T {
-    struct U : S {
+    struct U : S { // expected-note 6{{candidate}}
       using S::S;
     };
     using T::T;
   };
-
-  S<A>::U ua(0);
-  S<B>::U ub(0);
+  S<A>::U ua(0); // expected-error {{no match}}
+  S<B>::U ub(0); // expected-error {{no match}}
 
   template<typename T>
   struct X : T {
@@ -108,7 +109,7 @@ namespace InhCtor {
   // FIXME: Consider reusing the same diagnostic between dependent and non-dependent contexts
   typedef int I;
   struct UsingInt {
-    using I::I; // expected-error {{'I' (aka 'int') is not a class, namespace, or scoped enumeration}}
+    using I::I; // expected-error {{'I' (aka 'int') is not a class, namespace, or enumeration}}
   };
   template<typename T> struct UsingIntTemplate {
     using T::T; // expected-error {{type 'int' cannot be used prior to '::' because it has no members}}

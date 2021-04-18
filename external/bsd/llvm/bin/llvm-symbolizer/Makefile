@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.4 2014/08/10 17:34:20 joerg Exp $
+#	$NetBSD: Makefile,v 1.6 2017/01/11 12:02:27 joerg Exp $
 
 PROG_CXX=	llvm-symbolizer
 NOMAN=		yes
@@ -7,17 +7,20 @@ NOMAN=		yes
 
 .PATH: ${LLVM_SRCDIR}/tools/llvm-symbolizer
 
-SRCS=	LLVMSymbolize.cpp \
-	llvm-symbolizer.cpp
+SRCS=	llvm-symbolizer.cpp
 
 LLVM_LIBS+= \
-	DebugInfo \
+	DebugInfoSymbolize \
+	DebugInfoDWARF \
+	DebugInfoPDB \
+	DebugInfoPDBRaw \
 	Object \
 	MCParser \
 	MC \
 	BitReader \
 	IR \
-	Support
+	Support \
+	Demangle
 
 LDADD+=	-lz
 DPADD+=	${LIBZ}

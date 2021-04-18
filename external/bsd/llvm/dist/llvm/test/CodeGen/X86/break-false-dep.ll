@@ -8,7 +8,7 @@ entry:
 ; SSE: movss ([[A0:%rdi|%rcx]]), %xmm0
 ; SSE: cvtss2sd %xmm0, %xmm0
 
-  %0 = load float* %x, align 4
+  %0 = load float, float* %x, align 4
   %1 = fpext float %0 to double
   ret double %1
 }
@@ -17,7 +17,7 @@ define float @t2(double* nocapture %x) nounwind readonly ssp optsize {
 entry:
 ; SSE-LABEL: t2:
 ; SSE: cvtsd2ss ([[A0]]), %xmm0
-  %0 = load double* %x, align 8
+  %0 = load double, double* %x, align 8
   %1 = fptrunc double %0 to float
   ret float %1
 }
@@ -27,7 +27,7 @@ entry:
 ; SSE-LABEL: squirtf:
 ; SSE: movss ([[A0]]), %xmm0
 ; SSE: sqrtss %xmm0, %xmm0
-  %z = load float* %x
+  %z = load float, float* %x
   %t = call float @llvm.sqrt.f32(float %z)
   ret float %t
 }
@@ -37,7 +37,7 @@ entry:
 ; SSE-LABEL: squirt:
 ; SSE: movsd ([[A0]]), %xmm0
 ; SSE: sqrtsd %xmm0, %xmm0
-  %z = load double* %x
+  %z = load double, double* %x
   %t = call double @llvm.sqrt.f64(double %z)
   ret double %t
 }
@@ -46,7 +46,7 @@ define float @squirtf_size(float* %x) nounwind optsize {
 entry:
 ; SSE-LABEL: squirtf_size:
 ; SSE: sqrtss ([[A0]]), %xmm0
-  %z = load float* %x
+  %z = load float, float* %x
   %t = call float @llvm.sqrt.f32(float %z)
   ret float %t
 }
@@ -55,7 +55,7 @@ define double @squirt_size(double* %x) nounwind optsize {
 entry:
 ; SSE-LABEL: squirt_size:
 ; SSE: sqrtsd ([[A0]]), %xmm0
-  %z = load double* %x
+  %z = load double, double* %x
   %t = call double @llvm.sqrt.f64(double %z)
   ret double %t
 }
@@ -64,7 +64,7 @@ declare float @llvm.sqrt.f32(float)
 declare double @llvm.sqrt.f64(double)
 
 ; SSE-LABEL: loopdep1
-; SSE: for.body
+; SSE: for.body{{$}}
 ;
 ; This loop contains two cvtsi2ss instructions that update the same xmm
 ; register.  Verify that the execution dependency fix pass breaks those
@@ -120,13 +120,14 @@ for.end:                                          ; preds = %for.body, %entry
 ; SSE: cvtsi2sdq %{{r[0-9a-x]+}}, %[[REG]]
 define i64 @loopdep2(i64* nocapture %x, double* nocapture %y) nounwind {
 entry:
-  %vx = load i64* %x
+  %vx = load i64, i64* %x
   br label %loop
 loop:
   %i = phi i64 [ 1, %entry ], [ %inc, %loop ]
   %s1 = phi i64 [ %vx, %entry ], [ %s2, %loop ]
   %fi = sitofp i64 %i to double
-  %vy = load double* %y
+  tail call void asm sideeffect "", "~{xmm0},~{xmm1},~{xmm2},~{xmm3},~{xmm4},~{xmm5},~{xmm6},~{xmm7},~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{dirflag},~{fpsr},~{flags}"()
+  %vy = load double, double* %y
   %fipy = fadd double %fi, %vy
   %iipy = fptosi double %fipy to i64
   %s2 = add i64 %s1, %iipy
@@ -139,7 +140,7 @@ ret:
 
 ; This loop contains a cvtsi2sd instruction that has a loop-carried
 ; false dependency on an xmm that is modified by other scalar instructions
-; that follow it in the loop. Additionally, the source of convert is a 
+; that follow it in the loop. Additionally, the source of convert is a
 ; memory operand. Verify the execution dependency fix pass breaks this
 ; dependency by inserting a xor before the convert.
 @x = common global [1024 x double] zeroinitializer, align 16
@@ -158,22 +159,23 @@ for.cond1.preheader:                              ; preds = %for.inc14, %entry
 
 for.body3:
   %indvars.iv = phi i64 [ 0, %for.cond1.preheader ], [ %indvars.iv.next, %for.body3 ]
-  %arrayidx = getelementptr inbounds [1024 x i32]* @v, i64 0, i64 %indvars.iv
-  %0 = load i32* %arrayidx, align 4
+  %arrayidx = getelementptr inbounds [1024 x i32], [1024 x i32]* @v, i64 0, i64 %indvars.iv
+  %0 = load i32, i32* %arrayidx, align 4
   %conv = sitofp i32 %0 to double
-  %arrayidx5 = getelementptr inbounds [1024 x double]* @x, i64 0, i64 %indvars.iv
-  %1 = load double* %arrayidx5, align 8
+  %arrayidx5 = getelementptr inbounds [1024 x double], [1024 x double]* @x, i64 0, i64 %indvars.iv
+  %1 = load double, double* %arrayidx5, align 8
   %mul = fmul double %conv, %1
-  %arrayidx7 = getelementptr inbounds [1024 x double]* @y, i64 0, i64 %indvars.iv
-  %2 = load double* %arrayidx7, align 8
+  %arrayidx7 = getelementptr inbounds [1024 x double], [1024 x double]* @y, i64 0, i64 %indvars.iv
+  %2 = load double, double* %arrayidx7, align 8
   %mul8 = fmul double %mul, %2
-  %arrayidx10 = getelementptr inbounds [1024 x double]* @z, i64 0, i64 %indvars.iv
-  %3 = load double* %arrayidx10, align 8
+  %arrayidx10 = getelementptr inbounds [1024 x double], [1024 x double]* @z, i64 0, i64 %indvars.iv
+  %3 = load double, double* %arrayidx10, align 8
   %mul11 = fmul double %mul8, %3
-  %arrayidx13 = getelementptr inbounds [1024 x double]* @w, i64 0, i64 %indvars.iv
+  %arrayidx13 = getelementptr inbounds [1024 x double], [1024 x double]* @w, i64 0, i64 %indvars.iv
   store double %mul11, double* %arrayidx13, align 8
   %indvars.iv.next = add nuw nsw i64 %indvars.iv, 1
   %exitcond = icmp eq i64 %indvars.iv.next, 1024
+  tail call void asm sideeffect "", "~{xmm0},~{xmm1},~{xmm2},~{xmm3},~{xmm4},~{xmm5},~{xmm6},~{xmm7},~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{dirflag},~{fpsr},~{flags}"()
   br i1 %exitcond, label %for.inc14, label %for.body3
 
 for.inc14:                                        ; preds = %for.body3
@@ -193,9 +195,85 @@ for.end16:                                        ; preds = %for.inc14
 ;SSE-NEXT: movsd [[XMM0]],
 ;AVX-LABEL:@loopdep3
 ;AVX: vxorps [[XMM0:%xmm[0-9]+]], [[XMM0]]
-;AVX-NEXT: vcvtsi2sdl {{.*}}, [[XMM0]], [[XMM0]]
+;AVX-NEXT: vcvtsi2sdl {{.*}}, [[XMM0]], {{%xmm[0-9]+}}
 ;AVX-NEXT: vmulsd {{.*}}, [[XMM0]], [[XMM0]]
 ;AVX-NEXT: vmulsd {{.*}}, [[XMM0]], [[XMM0]]
 ;AVX-NEXT: vmulsd {{.*}}, [[XMM0]], [[XMM0]]
 ;AVX-NEXT: vmovsd [[XMM0]],
+}
+
+define double @inlineasmdep(i64 %arg) {
+top:
+  tail call void asm sideeffect "", "~{xmm0},~{xmm1},~{xmm2},~{xmm3},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm4},~{xmm5},~{xmm6},~{xmm7},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{dirflag},~{fpsr},~{flags}"()
+  %tmp1 = sitofp i64 %arg to double
+  ret double %tmp1
+;AVX-LABEL:@inlineasmdep
+;AVX: vxorps  [[XMM0:%xmm[0-9]+]], [[XMM0]], [[XMM0]]
+;AVX-NEXT: vcvtsi2sdq {{.*}}, [[XMM0]], {{%xmm[0-9]+}}
+}
+
+; Make sure we are making a smart choice regarding undef registers and
+; hiding the false dependency behind a true dependency
+define double @truedeps(float %arg) {
+top:
+  tail call void asm sideeffect "", "~{xmm6},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm0},~{xmm1},~{xmm2},~{xmm3},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm4},~{xmm5},~{xmm7},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{dirflag},~{fpsr},~{flags}"()
+  %tmp1 = fpext float %arg to double
+  ret double %tmp1
+;AVX-LABEL:@truedeps
+;AVX-NOT: vxorps
+;AVX: vcvtss2sd [[XMM0:%xmm[0-9]+]], [[XMM0]], {{%xmm[0-9]+}}
+}
+
+; Make sure we are making a smart choice regarding undef registers and
+; choosing the register with the highest clearence
+define double @clearence(i64 %arg) {
+top:
+  tail call void asm sideeffect "", "~{xmm6},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm0},~{xmm1},~{xmm2},~{xmm3},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm4},~{xmm5},~{xmm7},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{dirflag},~{fpsr},~{flags}"()
+  %tmp1 = sitofp i64 %arg to double
+  ret double %tmp1
+;AVX-LABEL:@clearence
+;AVX: vxorps  [[XMM6:%xmm6]], [[XMM6]], [[XMM6]]
+;AVX-NEXT: vcvtsi2sdq {{.*}}, [[XMM6]], {{%xmm[0-9]+}}
+}
+
+; Make sure we are making a smart choice regarding undef registers in order to
+; avoid a cyclic dependence on a write to the same register in a previous
+; iteration, especially when we cannot zero out the undef register because it
+; is alive.
+define i64 @loopclearence(i64* nocapture %x, double* nocapture %y) nounwind {
+entry:
+  %vx = load i64, i64* %x
+  br label %loop
+loop:
+  %i = phi i64 [ 1, %entry ], [ %inc, %loop ]
+  %s1 = phi i64 [ %vx, %entry ], [ %s2, %loop ]
+  %fi = sitofp i64 %i to double
+  tail call void asm sideeffect "", "~{xmm0},~{xmm1},~{xmm2},~{xmm3},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{dirflag},~{fpsr},~{flags}"()
+  tail call void asm sideeffect "", "~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{dirflag},~{fpsr},~{flags}"()
+  %vy = load double, double* %y
+  %fipy = fadd double %fi, %vy
+  %iipy = fptosi double %fipy to i64
+  %s2 = add i64 %s1, %iipy
+  %inc = add nsw i64 %i, 1
+  %exitcond = icmp eq i64 %inc, 156250000
+  br i1 %exitcond, label %ret, label %loop
+ret:
+  ret i64 %s2
+;AVX-LABEL:@loopclearence
+;Registers 4-7 are not used and therefore one of them should be chosen
+;AVX-NOT: {{%xmm[4-7]}}
+;AVX: vcvtsi2sdq {{.*}}, [[XMM4_7:%xmm[4-7]]], {{%xmm[0-9]+}}
+;AVX-NOT: [[XMM4_7]]
 }

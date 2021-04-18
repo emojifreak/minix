@@ -14,7 +14,6 @@
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/PrettyStackTrace.h"
 #include "clang/Basic/SourceManager.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdio>
 using namespace clang;
@@ -134,7 +133,7 @@ const char *FullSourceLoc::getCharacterData(bool *Invalid) const {
 
 StringRef FullSourceLoc::getBufferData(bool *Invalid) const {
   assert(isValid());
-  return SrcMgr->getBuffer(SrcMgr->getFileID(*this), Invalid)->getBuffer();;
+  return SrcMgr->getBuffer(SrcMgr->getFileID(*this), Invalid)->getBuffer();
 }
 
 std::pair<FileID, unsigned> FullSourceLoc::getDecomposedLoc() const {

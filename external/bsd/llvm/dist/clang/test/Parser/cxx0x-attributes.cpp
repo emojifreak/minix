@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -fcxx-exceptions -fexceptions -fsyntax-only -verify -std=c++11 -Wc++14-compat %s
+// RUN: %clang_cc1 -fcxx-exceptions -fexceptions -fsyntax-only -verify -std=c++11 -Wc++14-compat -Wc++14-extensions -Wc++1z-extensions %s
 
 // Need std::initializer_list
 namespace std {
@@ -288,6 +288,7 @@ namespace arguments {
   void f[[gnu::format(printf, 1, 2)]](const char*, ...);
   void g() [[unknown::foo(ignore arguments for unknown attributes, even with symbols!)]]; // expected-warning {{unknown attribute 'foo' ignored}}
   [[deprecated("with argument")]] int i;
+  // expected-warning@-1 {{use of the 'deprecated' attribute is a C++14 extension}}
 }
 
 // Forbid attributes on decl specifiers.
@@ -330,8 +331,11 @@ namespace GccASan {
 
 namespace {
   [[deprecated]] void bar();
+  // expected-warning@-1 {{use of the 'deprecated' attribute is a C++14 extension}}
   [[deprecated("hello")]] void baz();
-  [[deprecated()]] void foo(); // expected-error {{parentheses must be omitted if 'deprecated' attribute's argument list is empty}}
+  // expected-warning@-1 {{use of the 'deprecated' attribute is a C++14 extension}}
+  [[deprecated()]] void foo();
+  // expected-error@-1 {{parentheses must be omitted if 'deprecated' attribute's argument list is empty}}
   [[gnu::deprecated()]] void quux();
 }
 
@@ -341,3 +345,22 @@ namespace {
 deprecated
 ]] void bad();
 }
+
+int fallthru(int n) {
+  switch (n) {
+  case 0:
+    n += 5;
+    [[fallthrough]]; // expected-warning {{use of the 'fallthrough' attribute is a C++1z extension}}
+  case 1:
+    n *= 2;
+    break;
+  }
+  return n;
+}
+
+#define attr_name bitand
+#define attr_name_2(x) x
+#define attr_name_3(x, y) x##y
+[[attr_name, attr_name_2(bitor), attr_name_3(com, pl)]] int macro_attrs; // expected-warning {{unknown attribute 'compl' ignored}} \
+   expected-warning {{unknown attribute 'bitor' ignored}} \
+   expected-warning {{unknown attribute 'bitand' ignored}}

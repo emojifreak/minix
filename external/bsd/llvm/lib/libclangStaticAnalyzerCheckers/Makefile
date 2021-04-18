@@ -1,18 +1,22 @@
-#	$NetBSD: Makefile,v 1.24 2014/08/10 17:35:06 joerg Exp $
+#	$NetBSD: Makefile,v 1.26 2017/01/11 12:02:32 joerg Exp $
 
 LIB=	clangStaticAnalyzerCheckers
 
 .include <bsd.init.mk>
 
 .PATH: ${CLANG_SRCDIR}/lib/StaticAnalyzer/Checkers
+.PATH: ${CLANG_SRCDIR}/lib/StaticAnalyzer/Checkers/MPI-Checker
 
 SRCS+=	AllocationDiagnostics.cpp \
+	AnalysisOrderChecker.cpp \
 	AnalyzerStatsChecker.cpp \
 	ArrayBoundChecker.cpp \
 	ArrayBoundCheckerV2.cpp \
 	BasicObjCFoundationChecks.cpp \
+	BlockInCriticalSectionChecker.cpp \
 	BoolAssignmentChecker.cpp \
 	BuiltinFunctionChecker.cpp \
+	CXXSelfAssignmentChecker.cpp \
 	ClangCheckers.cpp \
 	CStringChecker.cpp \
 	CStringSyntaxChecker.cpp \
@@ -25,18 +29,27 @@ SRCS+=	AllocationDiagnostics.cpp \
 	CheckSizeofPointer.cpp \
 	CheckerDocumentation.cpp \
 	ChrootChecker.cpp \
+	CloneChecker.cpp \
+	ConversionChecker.cpp \
 	DeadStoresChecker.cpp \
 	DebugCheckers.cpp \
 	DereferenceChecker.cpp \
 	DirectIvarAssignment.cpp \
 	DivZeroChecker.cpp \
+	DynamicTypeChecker.cpp \
 	DynamicTypePropagation.cpp \
 	ExprInspectionChecker.cpp \
 	FixedAddressChecker.cpp \
+	GTestChecker.cpp \
 	GenericTaintChecker.cpp \
 	IdenticalExprChecker.cpp \
+	IteratorPastEndChecker.cpp \
 	IvarInvalidationChecker.cpp \
 	LLVMConventionsChecker.cpp \
+	LocalizationChecker.cpp \
+	MPIBugReporter.cpp \
+	MPIChecker.cpp \
+	MPIFunctionClassifier.cpp \
 	MacOSKeychainAPIChecker.cpp \
 	MacOSXAPIChecker.cpp \
 	MallocChecker.cpp \
@@ -46,12 +59,17 @@ SRCS+=	AllocationDiagnostics.cpp \
 	NSErrorChecker.cpp \
 	NoReturnFunctionChecker.cpp \
 	NonNullParamChecker.cpp \
+	NullabilityChecker.cpp \
+	NumberObjectConversionChecker.cpp \
 	ObjCAtSyncChecker.cpp \
 	ObjCContainersASTChecker.cpp \
 	ObjCContainersChecker.cpp \
 	ObjCMissingSuperCallChecker.cpp \
+	ObjCPropertyChecker.cpp \
 	ObjCSelfInitChecker.cpp \
+	ObjCSuperDeallocChecker.cpp \
 	ObjCUnusedIVarsChecker.cpp \
+	PaddingChecker.cpp \
 	PointerArithChecker.cpp \
 	PointerSubChecker.cpp \
 	PthreadLockChecker.cpp \
@@ -60,6 +78,7 @@ SRCS+=	AllocationDiagnostics.cpp \
 	ReturnUndefChecker.cpp \
 	SimpleStreamChecker.cpp \
 	StackAddrEscapeChecker.cpp \
+	StdLibraryFunctionsChecker.cpp \
 	StreamChecker.cpp \
 	TaintTesterChecker.cpp \
 	TestAfterDivZeroChecker.cpp \
@@ -72,11 +91,9 @@ SRCS+=	AllocationDiagnostics.cpp \
 	UnixAPIChecker.cpp \
 	UnreachableCodeChecker.cpp \
 	VLASizeChecker.cpp \
+	ValistChecker.cpp \
+	VforkChecker.cpp \
 	VirtualCallChecker.cpp
-
-CLANG_TABLEGEN_SRC=		Checkers.td
-CLANG_TABLEGEN_INCLUDES=	-I${CLANG_SRCDIR}/include
-CLANG_TABLEGEN_OUTPUT=	Checkers.inc|-gen-clang-sa-checkers
 
 .include "${.PARSEDIR}/../../tablegen.mk"
 

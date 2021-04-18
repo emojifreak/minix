@@ -162,3 +162,82 @@ void blockCapturesItselfInTheLoop(int x, int m) {
   }
   assignData(x);
 }
+
+// Blocks that called the function they were contained in that also have
+// static locals caused crashes.
+// rdar://problem/21698099
+void takeNonnullBlock(void (^)(void)) __attribute__((nonnull));
+void takeNonnullIntBlock(int (^)(void)) __attribute__((nonnull));
+
+void testCallContainingWithSignature1()
+{
+  takeNonnullBlock(^{
+    static const char str[] = "Lost connection to sharingd";
+    testCallContainingWithSignature1();
+  });
+}
+
+void testCallContainingWithSignature2()
+{
+  takeNonnullBlock(^void{
+    static const char str[] = "Lost connection to sharingd";
+    testCallContainingWithSignature2();
+  });
+}
+
+void testCallContainingWithSignature3()
+{
+  takeNonnullBlock(^void(){
+    static const char str[] = "Lost connection to sharingd";
+    testCallContainingWithSignature3();
+  });
+}
+
+void testCallContainingWithSignature4()
+{
+  takeNonnullBlock(^void(void){
+    static const char str[] = "Lost connection to sharingd";
+    testCallContainingWithSignature4();
+  });
+}
+
+void testCallContainingWithSignature5()
+{
+  takeNonnullIntBlock(^{
+    static const char str[] = "Lost connection to sharingd";
+    testCallContainingWithSignature5();
+    return 0;
+  });
+}
+
+__attribute__((objc_root_class))
+@interface SuperClass
+- (void)someMethod;
+@end
+
+@interface SomeClass : SuperClass
+@end
+
+// Make sure to properly handle super-calls when a block captures
+// a local variable named 'self'.
+@implementation SomeClass
+-(void)foo; {
+  /*__weak*/ SomeClass *weakSelf = self;
+  (void)(^(void) {
+    SomeClass *self = weakSelf;
+    (void)(^(void) {
+      (void)self;
+      [super someMethod]; // no-warning
+    });
+  });
+}
+@end
+
+// The incorrect block variable initialization below is a hard compile-time
+// error in C++.
+#if !defined(__cplusplus)
+void call_block_with_fewer_arguments() {
+  void (^b)() = ^(int a) { };
+  b(); // expected-warning {{Block taking 1 argument is called with fewer (0)}}
+}
+#endif

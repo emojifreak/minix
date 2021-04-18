@@ -21,8 +21,8 @@ int conv1c = conv1.operator auto();
 int conv1d = conv1.operator int(); // expected-error {{no member named 'operator int'}}
 
 struct Conv2 {
-  operator auto() { return 0; }  // expected-note 2{{previous}}
-  operator auto() { return 0.; } // expected-error {{cannot be redeclared}} expected-error {{redefinition of 'operator auto'}}
+  operator auto() { return 0; }  // expected-note {{previous}}
+  operator auto() { return 0.; } // expected-error {{cannot be redeclared}} expected-error {{cannot initialize return object of type 'auto' with an rvalue of type 'double'}}
 };
 
 struct Conv3 {
@@ -496,3 +496,13 @@ namespace TrailingReturnTypeForConversionOperator {
     }
   };
 };
+
+namespace PR24989 {
+  auto x = [](auto){};
+  using T = decltype(x);
+  void (T::*p)(int) const = &T::operator();
+}
+
+void forinit_decltypeauto() {
+  for (decltype(auto) forinit_decltypeauto_inner();;) {} // expected-warning {{interpreted as a function}} expected-note {{replace}}
+}

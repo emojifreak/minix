@@ -1,9 +1,9 @@
-// RUN: %clang_cc1 -triple i686-windows-msvc   -emit-llvm -std=c11 -O0 -o - %s | FileCheck --check-prefix=CHECK --check-prefix=MS %s
-// RUN: %clang_cc1 -triple x86_64-windows-msvc -emit-llvm -std=c11 -O0 -o - %s | FileCheck --check-prefix=CHECK --check-prefix=MS %s
-// RUN: %clang_cc1 -triple i686-windows-gnu    -emit-llvm -std=c11 -O0 -o - %s | FileCheck --check-prefix=CHECK --check-prefix=GNU %s
-// RUN: %clang_cc1 -triple x86_64-windows-gnu  -emit-llvm -std=c11 -O0 -o - %s | FileCheck --check-prefix=CHECK --check-prefix=GNU %s
-// RUN: %clang_cc1 -triple i686-windows-msvc   -emit-llvm -std=c11 -O1 -o - %s | FileCheck --check-prefix=O1 --check-prefix=MO1 %s
-// RUN: %clang_cc1 -triple i686-windows-gnu    -emit-llvm -std=c11 -O1 -o - %s | FileCheck --check-prefix=O1 --check-prefix=GO1 %s
+// RUN: %clang_cc1 -triple i686-windows-msvc   -fms-extensions -emit-llvm -std=c11 -O0 -o - %s | FileCheck --check-prefix=CHECK --check-prefix=MS %s
+// RUN: %clang_cc1 -triple x86_64-windows-msvc -fms-extensions -emit-llvm -std=c11 -O0 -o - %s | FileCheck --check-prefix=CHECK --check-prefix=MS %s
+// RUN: %clang_cc1 -triple i686-windows-gnu    -fms-extensions -emit-llvm -std=c11 -O0 -o - %s | FileCheck --check-prefix=CHECK --check-prefix=GNU %s
+// RUN: %clang_cc1 -triple x86_64-windows-gnu  -fms-extensions -emit-llvm -std=c11 -O0 -o - %s | FileCheck --check-prefix=CHECK --check-prefix=GNU %s
+// RUN: %clang_cc1 -triple i686-windows-msvc   -fms-extensions -emit-llvm -std=c11 -O1 -o - %s | FileCheck --check-prefix=O1 --check-prefix=MO1 %s
+// RUN: %clang_cc1 -triple i686-windows-gnu    -fms-extensions -emit-llvm -std=c11 -O1 -o - %s | FileCheck --check-prefix=O1 --check-prefix=GO1 %s
 
 #define JOIN2(x, y) x##y
 #define JOIN(x, y) JOIN2(x, y)
@@ -45,7 +45,8 @@ __declspec(dllimport) extern int GlobalRedecl3;
 USEVAR(GlobalRedecl3)
 
 // Make sure this works even if the decl has been used before it's defined (PR20792).
-// CHECK: @GlobalRedecl4 = common global i32
+// MS: @GlobalRedecl4 = common dllexport global i32
+// GNU: @GlobalRedecl4 = common global i32
 __declspec(dllimport) extern int GlobalRedecl4;
 USEVAR(GlobalRedecl4)
                       int GlobalRedecl4; // dllimport ignored
@@ -111,13 +112,15 @@ __declspec(dllimport) void redecl2(void);
                       void redecl2(void);
 USE(redecl2)
 
-// CHECK-DAG: define void @redecl3()
+// MS: define dllexport void @redecl3()
+// GNU: define void @redecl3()
 __declspec(dllimport) void redecl3(void);
                       void redecl3(void) {} // dllimport ignored
 USE(redecl3)
 
 // Make sure this works even if the decl is used before it's defined (PR20792).
-// CHECK-DAG: define void @redecl4()
+// MS: define dllexport void @redecl4()
+// GNU: define void @redecl4()
 __declspec(dllimport) void redecl4(void);
 USE(redecl4)
                       void redecl4(void) {} // dllimport ignored

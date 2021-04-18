@@ -26,7 +26,7 @@ int t6 __attribute__((visibility("protected")));
 // CHECK: @t12 = global i32 0, section "SECT"
 int t12 __attribute__((section("SECT")));
 
-// CHECK: @t9 = weak alias bitcast (void ()* @__t8 to void (...)*)
+// CHECK: @t9 = weak alias void (...), bitcast (void ()* @__t8 to void (...)*)
 void __t8() {}
 void t9() __attribute__((weak, alias("__t8")));
 
@@ -79,7 +79,7 @@ void (__attribute__((fastcall)) *fptr)(int);
 void t21(void) {
   fptr(10);
 }
-// CHECK: [[FPTRVAR:%[a-z0-9]+]] = load void (i32)** @fptr
+// CHECK: [[FPTRVAR:%[a-z0-9]+]] = load void (i32)*, void (i32)** @fptr
 // CHECK-NEXT: call x86_fastcallcc void [[FPTRVAR]](i32 inreg 10)
 
 
@@ -90,5 +90,5 @@ void __attribute__((section(".bar"))) t22(void) {}
 
 // CHECK: define void @t22() [[NUW]] section ".bar"
 
-// CHECK: attributes [[NUW]] = { nounwind{{.*}} }
-// CHECK: attributes [[NR]] = { noreturn nounwind{{.*}} }
+// CHECK: attributes [[NUW]] = { noinline nounwind{{.*}} }
+// CHECK: attributes [[NR]] = { noinline noreturn nounwind{{.*}} }

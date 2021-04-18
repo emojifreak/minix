@@ -189,6 +189,14 @@ void test_DO(DO *d, A* a) {
   [d method:a aout:&a];
 }
 
+@interface Nullability
+- (nonnull A *)method:(nullable A *)param;
+@end
+
+void test_Nullability(Nullability *n, A* a) {
+  [n method: a];
+}
+
 // RUN: c-index-test -code-completion-at=%s:23:19 %s | FileCheck -check-prefix=CHECK-CC1 %s
 // CHECK-CC1: {TypedText categoryClassMethod} (35)
 // CHECK-CC1: {TypedText classMethod1:}{Placeholder (id)}{HorizontalSpace  }{TypedText withKeyword:}{Placeholder (int)} (35)
@@ -210,13 +218,13 @@ void test_DO(DO *d, A* a) {
 // CHECK-CC2-NEXT: Container Kind: ObjCInterfaceDecl
 // CHECK-CC2-NEXT: Container is complete
 // CHECK-CC2-NEXT: Container USR: c:objc(cs)Foo
-// RUN: c-index-test -code-completion-at=%s:61:16 %s | FileCheck -check-prefix=CHECK-CC3 %s
+// RUN: c-index-test -code-completion-at=%s:61:17 %s | FileCheck -check-prefix=CHECK-CC3 %s
 // CHECK-CC3: ObjCClassMethodDecl:{ResultType int}{TypedText MyClassMethod:}{Placeholder (id)}
 // CHECK-CC3: ObjCClassMethodDecl:{ResultType int}{TypedText MyPrivateMethod}
-// RUN: c-index-test -code-completion-at=%s:65:16 %s | FileCheck -check-prefix=CHECK-CC4 %s
+// RUN: c-index-test -code-completion-at=%s:65:17 %s | FileCheck -check-prefix=CHECK-CC4 %s
 // CHECK-CC4: ObjCInstanceMethodDecl:{ResultType int}{TypedText MyInstMethod:}{Placeholder (id)}{HorizontalSpace  }{TypedText second:}{Placeholder (id)}
 // CHECK-CC4: ObjCInstanceMethodDecl:{ResultType int}{TypedText MyPrivateInstMethod}
-// RUN: c-index-test -code-completion-at=%s:74:9 %s | FileCheck -check-prefix=CHECK-CC5 %s
+// RUN: c-index-test -code-completion-at=%s:74:10 %s | FileCheck -check-prefix=CHECK-CC5 %s
 // CHECK-CC5: ObjCInstanceMethodDecl:{ResultType int}{TypedText MyInstMethod:}{Placeholder (id)}{HorizontalSpace  }{TypedText second:}{Placeholder (id)}
 // CHECK-CC5: ObjCInstanceMethodDecl:{ResultType int}{TypedText MySubInstMethod}
 // RUN: c-index-test -code-completion-at=%s:82:8 %s | FileCheck -check-prefix=CHECK-CC6 %s
@@ -303,7 +311,7 @@ void test_DO(DO *d, A* a) {
 // CHECK-CCI: ObjCInstanceMethodDecl:{ResultType void}{TypedText method1} (37)
 // CHECK-CCI: ObjCInstanceMethodDecl:{ResultType void}{TypedText method2} (35)
 
-// RUN: c-index-test -code-completion-at=%s:150:5 %s | FileCheck -check-prefix=CHECK-REDUNDANT %s
+// RUN: c-index-test -code-completion-at=%s:150:6 %s | FileCheck -check-prefix=CHECK-REDUNDANT %s
 // CHECK-REDUNDANT: ObjCInstanceMethodDecl:{ResultType void}{TypedText method2} (35)
 // CHECK-REDUNDANT-NOT: ObjCInstanceMethodDecl:{ResultType void}{TypedText method2}
 // CHECK-REDUNDANT: ObjCInstanceMethodDecl:{ResultType void}{TypedText method3} (35)
@@ -335,3 +343,6 @@ void test_DO(DO *d, A* a) {
 
 // RUN: c-index-test -code-completion-at=%s:189:6 %s | FileCheck -check-prefix=CHECK-DISTRIB-OBJECTS %s
 // CHECK-DISTRIB-OBJECTS: ObjCInstanceMethodDecl:{ResultType void}{TypedText method:}{Placeholder (in bycopy A *)}{HorizontalSpace  }{TypedText result:}{Placeholder (out byref A **)} (35)
+
+// RUN: c-index-test -code-completion-at=%s:197:6 %s | FileCheck -check-prefix=CHECK-NULLABLE %s
+// CHECK-NULLABLE: ObjCInstanceMethodDecl:{ResultType A * _Nonnull}{TypedText method:}{Placeholder (nullable A *)}

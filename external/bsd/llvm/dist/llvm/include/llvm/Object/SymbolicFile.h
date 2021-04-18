@@ -15,6 +15,8 @@
 #define LLVM_OBJECT_SYMBOLICFILE_H
 
 #include "llvm/Object/Binary.h"
+#include "llvm/Support/Format.h"
+#include <utility>
 
 namespace llvm {
 namespace object {
@@ -28,6 +30,12 @@ union DataRefImpl {
   uintptr_t p;
   DataRefImpl() { std::memset(this, 0, sizeof(DataRefImpl)); }
 };
+
+template <typename OStream>
+OStream& operator<<(OStream &OS, const DataRefImpl &D) {
+  OS << "(" << format("0x%x8", D.p) << " (" << format("0x%x8", D.d.a) << ", " << format("0x%x8", D.d.b) << "))";
+  return OS;
+}
 
 inline bool operator==(const DataRefImpl &a, const DataRefImpl &b) {
   // Check bitwise identical. This is the only legal way to compare a union w/o
@@ -45,11 +53,13 @@ inline bool operator<(const DataRefImpl &a, const DataRefImpl &b) {
   return std::memcmp(&a, &b, sizeof(DataRefImpl)) < 0;
 }
 
-template <class content_type> class content_iterator {
+template <class content_type>
+class content_iterator
+    : public std::iterator<std::forward_iterator_tag, content_type> {
   content_type Current;
 
 public:
-  content_iterator(content_type symb) : Current(symb) {}
+  content_iterator(content_type symb) : Current(std::move(symb)) {}
 
   const content_type *operator->() const { return &Current; }
 
@@ -78,7 +88,6 @@ class BasicSymbolRef {
   const SymbolicFile *OwningObject;
 
 public:
-  // FIXME: should we add a SF_Text?
   enum Flags : unsigned {
     SF_None = 0,
     SF_Undefined = 1U << 0,      // Symbol is defined in another object file
@@ -87,9 +96,14 @@ public:
     SF_Absolute = 1U << 3,       // Absolute symbol
     SF_Common = 1U << 4,         // Symbol has common linkage
     SF_Indirect = 1U << 5,       // Symbol is an alias to another symbol
-    SF_FormatSpecific = 1U << 6, // Specific to the object file format
+    SF_Exported = 1U << 6,       // Symbol is visible to other DSOs
+    SF_FormatSpecific = 1U << 7, // Specific to the object file format
                                  // (e.g. section symbols)
-    SF_Thumb = 1U << 7           // Thumb symbol in a 32-bit ARM binary
+    SF_Thumb = 1U << 8,          // Thumb symbol in a 32-bit ARM binary
+    SF_Hidden = 1U << 9,         // Symbol has hidden visibility
+    SF_Const = 1U << 10,         // Symbol value is constant
+    SF_Executable = 1U << 11,    // Symbol points to an executable section
+                                 // (IR only)
   };
 
   BasicSymbolRef() : OwningObject(nullptr) { }
@@ -111,11 +125,9 @@ public:
 
 typedef content_iterator<BasicSymbolRef> basic_symbol_iterator;
 
-const uint64_t UnknownAddressOrSize = ~0ULL;
-
 class SymbolicFile : public Binary {
 public:
-  virtual ~SymbolicFile();
+  ~SymbolicFile() override;
   SymbolicFile(unsigned int Type, MemoryBufferRef Source);
 
   // virtual interface.
@@ -126,32 +138,26 @@ public:
 
   virtual uint32_t getSymbolFlags(DataRefImpl Symb) const = 0;
 
-  virtual basic_symbol_iterator symbol_begin_impl() const = 0;
+  virtual basic_symbol_iterator symbol_begin() const = 0;
 
-  virtual basic_symbol_iterator symbol_end_impl() const = 0;
+  virtual basic_symbol_iterator symbol_end() const = 0;
 
   // convenience wrappers.
-  basic_symbol_iterator symbol_begin() const {
-    return symbol_begin_impl();
-  }
-  basic_symbol_iterator symbol_end() const {
-    return symbol_end_impl();
-  }
   typedef iterator_range<basic_symbol_iterator> basic_symbol_iterator_range;
   basic_symbol_iterator_range symbols() const {
     return basic_symbol_iterator_range(symbol_begin(), symbol_end());
   }
 
   // construction aux.
-  static ErrorOr<std::unique_ptr<SymbolicFile>>
+  static Expected<std::unique_ptr<SymbolicFile>>
   createSymbolicFile(MemoryBufferRef Object, sys::fs::file_magic Type,
                      LLVMContext *Context);
 
-  static ErrorOr<std::unique_ptr<SymbolicFile>>
+  static Expected<std::unique_ptr<SymbolicFile>>
   createSymbolicFile(MemoryBufferRef Object) {
     return createSymbolicFile(Object, sys::fs::file_magic::unknown, nullptr);
   }
-  static ErrorOr<OwningBinary<SymbolicFile>>
+  static Expected<OwningBinary<SymbolicFile>>
   createSymbolicFile(StringRef ObjectPath);
 
   static inline bool classof(const Binary *v) {

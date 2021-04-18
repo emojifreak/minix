@@ -14,6 +14,10 @@
 #ifndef LLVM_CLANG_BASIC_LINKAGE_H
 #define LLVM_CLANG_BASIC_LINKAGE_H
 
+#include <assert.h>
+#include <stdint.h>
+#include <utility>
+
 namespace clang {
 
 /// \brief Describes the different kinds of linkage 
@@ -64,6 +68,10 @@ enum GVALinkage {
   GVA_StrongExternal,
   GVA_StrongODR
 };
+
+inline bool isDiscardableGVALinkage(GVALinkage L) {
+  return L <= GVA_DiscardableODR;
+}
 
 inline bool isExternallyVisible(Linkage L) {
   return L == ExternalLinkage || L == VisibleNoLinkage;

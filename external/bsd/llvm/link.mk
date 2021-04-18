@@ -47,8 +47,4 @@ LDADD+=	-lterminfo
 DPADD+=	${LIBTERMINFO}
 .endif
 
-.if defined(__MINIX) && defined(HOSTPROG) && ${HOST_OSTYPE:C/\-.*//} != "Minix"
 LDADD+=	-lpthread
-.else
-LDADD+= -lc++ -lmthread
-.endif # defined(__MINIX)

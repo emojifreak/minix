@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile,v 1.33 2015/01/29 20:41:33 joerg Exp $
+#	$NetBSD: Makefile,v 1.35 2017/01/11 12:02:25 joerg Exp $
 
 PROG_CXX=	clang
 NOMAN=		yes
@@ -6,12 +6,6 @@ NOMAN=		yes
 .if !defined(HOSTPROG)
 SYMLINKS+=	clang ${BINDIR}/clang++
 SYMLINKS+=	clang ${BINDIR}/clang-cpp
-
-# if defined(__MINIX)
-SYMLINKS+=	clang ${BINDIR}/cc
-SYMLINKS+=	clang ${BINDIR}/c++
-SYMLINKS+=	clang ${BINDIR}/cpp
-# endif # defined(__MINIX)
 .endif
 
 .include <bsd.init.mk>
@@ -29,6 +23,7 @@ CLANG_LIBS+= \
 	clangStaticAnalyzerFrontend \
 	clangStaticAnalyzerCheckers \
 	clangStaticAnalyzerCore \
+	clangASTMatchers \
 	clangDriver \
 	clangSerialization \
 	clangCodeGen \
@@ -43,6 +38,9 @@ CLANG_LIBS+= \
 	clangBasic
 
 LLVM_LIBS+= \
+	TransformsCoroutines \
+	ProfileDataCoverage \
+	LTO \
 	ObjCARC \
 	ipo \
 	IRReader \
@@ -81,8 +79,12 @@ LLVM_LIBS+= \
 	X86Utils \
 	X86AsmParser \
 	X86AsmPrinter \
+	GlobalISel \
 	SelectionDAG \
 	AsmPrinter \
+	DebugInfoCodeView \
+	DebugInfoMSF \
+	Passes \
 	CodeGen \
 	Vectorize \
 	Target \
@@ -90,17 +92,17 @@ LLVM_LIBS+= \
 	Instrumentation \
 	ScalarOpts \
 	ProfileData \
-	Analysis \
 	MCDisassembler \
 	MCParser \
 	MC \
+	Analysis \
 	Object \
 	Linker \
 	TransformsUtils \
-	ipa \
 	IR \
 	Option \
-	Support
+	Support \
+	Demangle
 
 .include "${.PARSEDIR}/../../link.mk"
 

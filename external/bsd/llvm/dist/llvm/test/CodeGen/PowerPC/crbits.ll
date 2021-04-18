@@ -1,4 +1,4 @@
-; RUN: llc -mcpu=pwr7 < %s | FileCheck %s
+; RUN: llc -verify-machineinstrs -mcpu=pwr7 < %s | FileCheck %s
 target datalayout = "E-m:e-i64:64-n32:64"
 target triple = "powerpc64-unknown-linux-gnu"
 
@@ -13,7 +13,7 @@ entry:
 ; CHECK-LABEL: @test1
 ; CHECK-DAG: fcmpu {{[0-9]+}}, 1, 2
 ; CHECK-DAG: li [[REG1:[0-9]+]], 1
-; CHECK-DAG: lfs [[REG2:[0-9]+]],
+; CHECK-DAG: xxlxor [[REG2:[0-9]+]], [[REG2]], [[REG2]]
 ; CHECK-DAG: fcmpu {{[0-9]+}}, 2, [[REG2]]
 ; CHECK: crnor
 ; CHECK: crnor
@@ -33,7 +33,7 @@ entry:
 ; CHECK-LABEL: @test2
 ; CHECK-DAG: fcmpu {{[0-9]+}}, 1, 2
 ; CHECK-DAG: li [[REG1:[0-9]+]], 1
-; CHECK-DAG: lfs [[REG2:[0-9]+]],
+; CHECK-DAG: xxlxor [[REG2:[0-9]+]], [[REG2]], [[REG2]]
 ; CHECK-DAG: fcmpu {{[0-9]+}}, 2, [[REG2]]
 ; CHECK: crnor
 ; CHECK: crnor
@@ -55,7 +55,7 @@ entry:
 ; CHECK-LABEL: @test3
 ; CHECK-DAG: fcmpu {{[0-9]+}}, 1, 2
 ; CHECK-DAG: li [[REG1:[0-9]+]], 1
-; CHECK-DAG: lfs [[REG2:[0-9]+]],
+; CHECK-DAG: xxlxor [[REG2:[0-9]+]], [[REG2]], [[REG2]]
 ; CHECK-DAG: fcmpu {{[0-9]+}}, 2, [[REG2]]
 ; CHECK: crnor
 ; CHECK: crnor
@@ -107,7 +107,7 @@ entry:
 ; CHECK-LABEL: @test6
 ; CHECK-DAG: andi. {{[0-9]+}}, 3, 1
 ; CHECK-DAG: cmpwi {{[0-9]+}}, 5, -2
-; CHECK-DAG: cror [[REG1:[0-9]+]], 1, 1
+; CHECK-DAG: crmove [[REG1:[0-9]+]], 1
 ; CHECK-DAG: andi. {{[0-9]+}}, 4, 1
 ; CHECK-DAG: li [[REG2:[0-9]+]], 1
 ; CHECK-DAG: crorc [[REG4:[0-9]+]], 1,
@@ -145,7 +145,7 @@ entry:
 
 define zeroext i32 @exttest8() #0 {
 entry:
-  %v0 = load i64* undef, align 8
+  %v0 = load i64, i64* undef, align 8
   %sub = sub i64 80, %v0
   %div = lshr i64 %sub, 1
   %conv13 = trunc i64 %div to i32

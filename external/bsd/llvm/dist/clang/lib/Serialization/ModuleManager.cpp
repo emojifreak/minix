@@ -11,13 +11,13 @@
 //  modules for the ASTReader.
 //
 //===----------------------------------------------------------------------===//
+#include "clang/Serialization/ModuleManager.h"
+#include "clang/Frontend/PCHContainerOperations.h"
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/ModuleMap.h"
 #include "clang/Serialization/GlobalModuleIndex.h"
-#include "clang/Serialization/ModuleManager.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/raw_ostream.h"
 #include <system_error>
 
 #ifndef NDEBUG
@@ -58,8 +58,7 @@ ModuleManager::addModule(StringRef FileName, ModuleKind Type,
                          unsigned Generation,
                          off_t ExpectedSize, time_t ExpectedModTime,
                          ASTFileSignature ExpectedSignature,
-                         std::function<ASTFileSignature(llvm::BitstreamReader &)>
-                             ReadSignature,
+                         ASTFileSignatureReader ReadSignature,
                          ModuleFile *&Module,
                          std::string &ErrorStr) {
   Module = nullptr;
@@ -67,7 +66,7 @@ ModuleManager::addModule(StringRef FileName, ModuleKind Type,
   // Look for the file entry. This only fails if the expected size or
   // modification time differ.
   const FileEntry *Entry;
-  if (Type == MK_ExplicitModule) {
+  if (Type == MK_ExplicitModule || Type == MK_PrebuiltModule) {
     // If we're not expecting to pull this file out of the module cache, it
     // might have a different mtime due to being moved across filesystems in
     // a distributed build. The size must still match, though. (As must the
@@ -85,33 +84,31 @@ ModuleManager::addModule(StringRef FileName, ModuleKind Type,
   }
 
   // Check whether we already loaded this module, before
-  ModuleFile *&ModuleEntry = Modules[Entry];
+  ModuleFile *ModuleEntry = Modules[Entry];
   bool NewModule = false;
   if (!ModuleEntry) {
     // Allocate a new module.
-    ModuleFile *New = new ModuleFile(Type, Generation);
-    New->Index = Chain.size();
-    New->FileName = FileName.str();
-    New->File = Entry;
-    New->ImportLoc = ImportLoc;
-    Chain.push_back(New);
     NewModule = true;
-    ModuleEntry = New;
+    ModuleEntry = new ModuleFile(Type, Generation);
+    ModuleEntry->Index = Chain.size();
+    ModuleEntry->FileName = FileName.str();
+    ModuleEntry->File = Entry;
+    ModuleEntry->ImportLoc = ImportLoc;
+    ModuleEntry->InputFilesValidationTimestamp = 0;
 
-    New->InputFilesValidationTimestamp = 0;
-    if (New->Kind == MK_ImplicitModule) {
-      std::string TimestampFilename = New->getTimestampFilename();
+    if (ModuleEntry->Kind == MK_ImplicitModule) {
+      std::string TimestampFilename = ModuleEntry->getTimestampFilename();
       vfs::Status Status;
       // A cached stat value would be fine as well.
       if (!FileMgr.getNoncachedStatValue(TimestampFilename, Status))
-        New->InputFilesValidationTimestamp =
-            Status.getLastModificationTime().toEpochTime();
+        ModuleEntry->InputFilesValidationTimestamp =
+            llvm::sys::toTimeT(Status.getLastModificationTime());
     }
 
     // Load the contents of the module
     if (std::unique_ptr<llvm::MemoryBuffer> Buffer = lookupBuffer(FileName)) {
       // The buffer was already provided for us.
-      New->Buffer = std::move(Buffer);
+      ModuleEntry->Buffer = std::move(Buffer);
     } else {
       // Open the AST file.
       llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> Buf(
@@ -123,46 +120,40 @@ ModuleManager::addModule(StringRef FileName, ModuleKind Type,
         // ModuleManager it must be the same underlying file.
         // FIXME: Because FileManager::getFile() doesn't guarantee that it will
         // give us an open file, this may not be 100% reliable.
-        Buf = FileMgr.getBufferForFile(New->File,
+        Buf = FileMgr.getBufferForFile(ModuleEntry->File,
                                        /*IsVolatile=*/false,
                                        /*ShouldClose=*/false);
       }
 
       if (!Buf) {
         ErrorStr = Buf.getError().message();
+        delete ModuleEntry;
         return Missing;
       }
 
-      New->Buffer = std::move(*Buf);
+      ModuleEntry->Buffer = std::move(*Buf);
     }
-    
-    // Initialize the stream
-    New->StreamFile.init((const unsigned char *)New->Buffer->getBufferStart(),
-                         (const unsigned char *)New->Buffer->getBufferEnd());
+
+    // Initialize the stream.
+    ModuleEntry->Data = PCHContainerRdr.ExtractPCH(*ModuleEntry->Buffer);
   }
 
   if (ExpectedSignature) {
-    if (NewModule)
-      ModuleEntry->Signature = ReadSignature(ModuleEntry->StreamFile);
-    else
-      assert(ModuleEntry->Signature == ReadSignature(ModuleEntry->StreamFile));
+    // If we've not read the control block yet, read the signature eagerly now
+    // so that we can check it.
+    if (!ModuleEntry->Signature)
+      ModuleEntry->Signature = ReadSignature(ModuleEntry->Data);
 
     if (ModuleEntry->Signature != ExpectedSignature) {
       ErrorStr = ModuleEntry->Signature ? "signature mismatch"
                                         : "could not read module signature";
 
-      if (NewModule) {
-        // Remove the module file immediately, since removeModules might try to
-        // invalidate the file cache for Entry, and that is not safe if this
-        // module is *itself* up to date, but has an out-of-date importer.
-        Modules.erase(Entry);
-        Chain.pop_back();
+      if (NewModule)
         delete ModuleEntry;
-      }
       return OutOfDate;
     }
   }
-  
+
   if (ImportedBy) {
     ModuleEntry->ImportedBy.insert(ImportedBy);
     ImportedBy->Imports.insert(ModuleEntry);
@@ -174,7 +165,20 @@ ModuleManager::addModule(StringRef FileName, ModuleKind Type,
   }
 
   Module = ModuleEntry;
-  return NewModule? NewlyLoaded : AlreadyLoaded;
+
+  if (!NewModule)
+    return AlreadyLoaded;
+
+  assert(!Modules[Entry] && "module loaded twice");
+  Modules[Entry] = ModuleEntry;
+
+  Chain.push_back(ModuleEntry);
+  if (!ModuleEntry->isModule())
+    PCHChain.push_back(ModuleEntry);
+  if (!ImportedBy)
+    Roots.push_back(ModuleEntry);
+
+  return NewlyLoaded;
 }
 
 void ModuleManager::removeModules(
@@ -184,14 +188,29 @@ void ModuleManager::removeModules(
   if (first == last)
     return;
 
+  // Explicitly clear VisitOrder since we might not notice it is stale.
+  VisitOrder.clear();
+
   // Collect the set of module file pointers that we'll be removing.
   llvm::SmallPtrSet<ModuleFile *, 4> victimSet(first, last);
 
+  auto IsVictim = [&](ModuleFile *MF) {
+    return victimSet.count(MF);
+  };
   // Remove any references to the now-destroyed modules.
   for (unsigned i = 0, n = Chain.size(); i != n; ++i) {
-    Chain[i]->ImportedBy.remove_if([&](ModuleFile *MF) {
-      return victimSet.count(MF);
-    });
+    Chain[i]->ImportedBy.remove_if(IsVictim);
+  }
+  Roots.erase(std::remove_if(Roots.begin(), Roots.end(), IsVictim),
+              Roots.end());
+
+  // Remove the modules from the PCH chain.
+  for (auto I = first; I != last; ++I) {
+    if (!(*I)->isModule()) {
+      PCHChain.erase(std::find(PCHChain.begin(), PCHChain.end(), *I),
+                     PCHChain.end());
+      break;
+    }
   }
 
   // Delete the modules and erase them from the various structures.
@@ -269,8 +288,10 @@ void ModuleManager::moduleFileAccepted(ModuleFile *MF) {
   ModulesInCommonWithGlobalIndex.push_back(MF);
 }
 
-ModuleManager::ModuleManager(FileManager &FileMgr)
-  : FileMgr(FileMgr), GlobalIndex(), FirstVisitState(nullptr) {}
+ModuleManager::ModuleManager(FileManager &FileMgr,
+                             const PCHContainerReader &PCHContainerRdr)
+    : FileMgr(FileMgr), PCHContainerRdr(PCHContainerRdr), GlobalIndex(),
+      FirstVisitState(nullptr) {}
 
 ModuleManager::~ModuleManager() {
   for (unsigned i = 0, e = Chain.size(); i != e; ++i)
@@ -278,10 +299,8 @@ ModuleManager::~ModuleManager() {
   delete FirstVisitState;
 }
 
-void
-ModuleManager::visit(bool (*Visitor)(ModuleFile &M, void *UserData),
-                     void *UserData,
-                     llvm::SmallPtrSetImpl<ModuleFile *> *ModuleFilesHit) {
+void ModuleManager::visit(llvm::function_ref<bool(ModuleFile &M)> Visitor,
+                          llvm::SmallPtrSetImpl<ModuleFile *> *ModuleFilesHit) {
   // If the visitation order vector is the wrong size, recompute the order.
   if (VisitOrder.size() != Chain.size()) {
     unsigned N = size();
@@ -294,28 +313,24 @@ ModuleManager::visit(bool (*Visitor)(ModuleFile &M, void *UserData),
     SmallVector<ModuleFile *, 4> Queue;
     Queue.reserve(N);
     llvm::SmallVector<unsigned, 4> UnusedIncomingEdges;
-    UnusedIncomingEdges.reserve(size());
-    for (ModuleIterator M = begin(), MEnd = end(); M != MEnd; ++M) {
-      if (unsigned Size = (*M)->ImportedBy.size())
-        UnusedIncomingEdges.push_back(Size);
-      else {
-        UnusedIncomingEdges.push_back(0);
-        Queue.push_back(*M);
-      }
+    UnusedIncomingEdges.resize(size());
+    for (ModuleFile *M : llvm::reverse(*this)) {
+      unsigned Size = M->ImportedBy.size();
+      UnusedIncomingEdges[M->Index] = Size;
+      if (!Size)
+        Queue.push_back(M);
     }
 
     // Traverse the graph, making sure to visit a module before visiting any
     // of its dependencies.
-    unsigned QueueStart = 0;
-    while (QueueStart < Queue.size()) {
-      ModuleFile *CurrentModule = Queue[QueueStart++];
+    while (!Queue.empty()) {
+      ModuleFile *CurrentModule = Queue.pop_back_val();
       VisitOrder.push_back(CurrentModule);
 
       // For any module that this module depends on, push it on the
       // stack (if it hasn't already been marked as visited).
-      for (llvm::SetVector<ModuleFile *>::iterator
-             M = CurrentModule->Imports.begin(),
-             MEnd = CurrentModule->Imports.end();
+      for (auto M = CurrentModule->Imports.rbegin(),
+                MEnd = CurrentModule->Imports.rend();
            M != MEnd; ++M) {
         // Remove our current module as an impediment to visiting the
         // module we depend on. If we were the last unvisited module
@@ -357,7 +372,7 @@ ModuleManager::visit(bool (*Visitor)(ModuleFile &M, void *UserData),
     // Visit the module.
     assert(State->VisitNumber[CurrentModule->Index] == VisitNumber - 1);
     State->VisitNumber[CurrentModule->Index] = VisitNumber;
-    if (!Visitor(*CurrentModule, UserData))
+    if (!Visitor(*CurrentModule))
       continue;
 
     // The visitor has requested that cut off visitation of any
@@ -388,57 +403,20 @@ ModuleManager::visit(bool (*Visitor)(ModuleFile &M, void *UserData),
   returnVisitState(State);
 }
 
-/// \brief Perform a depth-first visit of the current module.
-static bool visitDepthFirst(ModuleFile &M, 
-                            bool (*Visitor)(ModuleFile &M, bool Preorder, 
-                                            void *UserData), 
-                            void *UserData,
-                            SmallVectorImpl<bool> &Visited) {
-  // Preorder visitation
-  if (Visitor(M, /*Preorder=*/true, UserData))
-    return true;
-  
-  // Visit children
-  for (llvm::SetVector<ModuleFile *>::iterator IM = M.Imports.begin(),
-                                            IMEnd = M.Imports.end();
-       IM != IMEnd; ++IM) {
-    if (Visited[(*IM)->Index])
-      continue;
-    Visited[(*IM)->Index] = true;
-
-    if (visitDepthFirst(**IM, Visitor, UserData, Visited))
-      return true;
-  }  
-  
-  // Postorder visitation
-  return Visitor(M, /*Preorder=*/false, UserData);
-}
-
-void ModuleManager::visitDepthFirst(bool (*Visitor)(ModuleFile &M, bool Preorder, 
-                                                    void *UserData), 
-                                    void *UserData) {
-  SmallVector<bool, 16> Visited(size(), false);
-  for (unsigned I = 0, N = Chain.size(); I != N; ++I) {
-    if (Visited[Chain[I]->Index])
-      continue;
-    Visited[Chain[I]->Index] = true;
-
-    if (::visitDepthFirst(*Chain[I], Visitor, UserData, Visited))
-      return;
-  }
-}
-
 bool ModuleManager::lookupModuleFile(StringRef FileName,
                                      off_t ExpectedSize,
                                      time_t ExpectedModTime,
                                      const FileEntry *&File) {
+  if (FileName == "-") {
+    File = nullptr;
+    return false;
+  }
+
   // Open the file immediately to ensure there is no race between stat'ing and
   // opening the file.
   File = FileMgr.getFile(FileName, /*openFile=*/true, /*cacheFailure=*/false);
-
-  if (!File && FileName != "-") {
+  if (!File)
     return false;
-  }
 
   if ((ExpectedSize && ExpectedSize != File->getSize()) ||
       (ExpectedModTime && ExpectedModTime != File->getModificationTime()))
@@ -453,15 +431,15 @@ bool ModuleManager::lookupModuleFile(StringRef FileName,
 namespace llvm {
   template<>
   struct GraphTraits<ModuleManager> {
-    typedef ModuleFile NodeType;
+    typedef ModuleFile *NodeRef;
     typedef llvm::SetVector<ModuleFile *>::const_iterator ChildIteratorType;
     typedef ModuleManager::ModuleConstIterator nodes_iterator;
-    
-    static ChildIteratorType child_begin(NodeType *Node) {
+
+    static ChildIteratorType child_begin(NodeRef Node) {
       return Node->Imports.begin();
     }
 
-    static ChildIteratorType child_end(NodeType *Node) {
+    static ChildIteratorType child_end(NodeRef Node) {
       return Node->Imports.end();
     }
     

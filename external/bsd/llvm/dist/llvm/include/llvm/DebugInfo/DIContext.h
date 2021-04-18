@@ -15,13 +15,14 @@
 #ifndef LLVM_DEBUGINFO_DICONTEXT_H
 #define LLVM_DEBUGINFO_DICONTEXT_H
 
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Object/ObjectFile.h"
-#include "llvm/Object/RelocVisitor.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/DataTypes.h"
+#include <cassert>
+#include <cstdint>
+#include <memory>
 #include <string>
+#include <tuple>
+#include <utility>
 
 namespace llvm {
 
@@ -34,8 +35,12 @@ struct DILineInfo {
   uint32_t Line;
   uint32_t Column;
 
+  // DWARF-specific.
+  uint32_t Discriminator;
+
   DILineInfo()
-      : FileName("<invalid>"), FunctionName("<invalid>"), Line(0), Column(0) {}
+      : FileName("<invalid>"), FunctionName("<invalid>"), Line(0), Column(0),
+        Discriminator(0) {}
 
   bool operator==(const DILineInfo &RHS) const {
     return Line == RHS.Line && Column == RHS.Column &&
@@ -44,6 +49,10 @@ struct DILineInfo {
   bool operator!=(const DILineInfo &RHS) const {
     return !(*this == RHS);
   }
+  bool operator<(const DILineInfo &RHS) const {
+    return std::tie(FileName, FunctionName, Line, Column) <
+           std::tie(RHS.FileName, RHS.FunctionName, RHS.Line, RHS.Column);
+  }
 };
 
 typedef SmallVector<std::pair<uint64_t, DILineInfo>, 16> DILineInfoTable;
@@ -51,18 +60,36 @@ typedef SmallVector<std::pair<uint64_t, DILineInfo>, 16> DILineInfoTable;
 /// DIInliningInfo - a format-neutral container for inlined code description.
 class DIInliningInfo {
   SmallVector<DILineInfo, 4> Frames;
- public:
-  DIInliningInfo() {}
+
+public:
+  DIInliningInfo() = default;
+
   DILineInfo getFrame(unsigned Index) const {
     assert(Index < Frames.size());
     return Frames[Index];
   }
+
+  DILineInfo *getMutableFrame(unsigned Index) {
+    assert(Index < Frames.size());
+    return &Frames[Index];
+  }
+
   uint32_t getNumberOfFrames() const {
     return Frames.size();
   }
+
   void addFrame(const DILineInfo &Frame) {
     Frames.push_back(Frame);
   }
+};
+
+/// DIGlobal - container for description of a global variable.
+struct DIGlobal {
+  std::string Name;
+  uint64_t Start;
+  uint64_t Size;
+
+  DIGlobal() : Name("<invalid>"), Start(0), Size(0) {}
 };
 
 /// A DINameKind is passed to name search methods to specify a
@@ -99,6 +126,7 @@ enum DIDumpType {
   DIDT_LineDwo,
   DIDT_Loc,
   DIDT_LocDwo,
+  DIDT_Macro,
   DIDT_Ranges,
   DIDT_Pubnames,
   DIDT_Pubtypes,
@@ -110,30 +138,26 @@ enum DIDumpType {
   DIDT_AppleNames,
   DIDT_AppleTypes,
   DIDT_AppleNamespaces,
-  DIDT_AppleObjC
+  DIDT_AppleObjC,
+  DIDT_CUIndex,
+  DIDT_GdbIndex,
+  DIDT_TUIndex,
 };
-
-// In place of applying the relocations to the data we've read from disk we use
-// a separate mapping table to the side and checking that at locations in the
-// dwarf where we expect relocated values. This adds a bit of complexity to the
-// dwarf parsing/extraction at the benefit of not allocating memory for the
-// entire size of the debug info sections.
-typedef DenseMap<uint64_t, std::pair<uint8_t, int64_t> > RelocAddrMap;
 
 class DIContext {
 public:
   enum DIContextKind {
-    CK_DWARF
+    CK_DWARF,
+    CK_PDB
   };
-  DIContextKind getKind() const { return Kind; }
 
   DIContext(DIContextKind K) : Kind(K) {}
-  virtual ~DIContext();
+  virtual ~DIContext() = default;
 
-  /// getDWARFContext - get a context for binary DWARF data.
-  static DIContext *getDWARFContext(const object::ObjectFile &Obj);
+  DIContextKind getKind() const { return Kind; }
 
-  virtual void dump(raw_ostream &OS, DIDumpType DumpType = DIDT_All) = 0;
+  virtual void dump(raw_ostream &OS, DIDumpType DumpType = DIDT_All,
+                    bool DumpEH = false, bool SummarizeTypes = false) = 0;
 
   virtual DILineInfo getLineInfoForAddress(uint64_t Address,
       DILineInfoSpecifier Specifier = DILineInfoSpecifier()) = 0;
@@ -141,10 +165,52 @@ public:
       uint64_t Size, DILineInfoSpecifier Specifier = DILineInfoSpecifier()) = 0;
   virtual DIInliningInfo getInliningInfoForAddress(uint64_t Address,
       DILineInfoSpecifier Specifier = DILineInfoSpecifier()) = 0;
+
 private:
   const DIContextKind Kind;
 };
 
-}
+/// An inferface for inquiring the load address of a loaded object file
+/// to be used by the DIContext implementations when applying relocations
+/// on the fly.
+class LoadedObjectInfo {
+protected:
+  LoadedObjectInfo(const LoadedObjectInfo &) = default;
+  LoadedObjectInfo() = default;
 
-#endif
+public:
+  virtual ~LoadedObjectInfo() = default;
+
+  /// Obtain the Load Address of a section by SectionRef.
+  ///
+  /// Calculate the address of the given section.
+  /// The section need not be present in the local address space. The addresses
+  /// need to be consistent with the addresses used to query the DIContext and
+  /// the output of this function should be deterministic, i.e. repeated calls with
+  /// the same Sec should give the same address.
+  virtual uint64_t getSectionLoadAddress(const object::SectionRef &Sec) const = 0;
+
+  /// If conveniently available, return the content of the given Section.
+  ///
+  /// When the section is available in the local address space, in relocated (loaded)
+  /// form, e.g. because it was relocated by a JIT for execution, this function
+  /// should provide the contents of said section in `Data`. If the loaded section
+  /// is not available, or the cost of retrieving it would be prohibitive, this
+  /// function should return false. In that case, relocations will be read from the
+  /// local (unrelocated) object file and applied on the fly. Note that this method
+  /// is used purely for optimzation purposes in the common case of JITting in the
+  /// local address space, so returning false should always be correct.
+  virtual bool getLoadedSectionContents(const object::SectionRef &Sec,
+                                        StringRef &Data) const {
+    return false;
+  }
+
+  /// Obtain a copy of this LoadedObjectInfo.
+  ///
+  /// The caller is responsible for deallocation once the copy is no longer required.
+  virtual std::unique_ptr<LoadedObjectInfo> clone() const = 0;
+};
+
+} // end namespace llvm
+
+#endif // LLVM_DEBUGINFO_DICONTEXT_H

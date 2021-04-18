@@ -14,11 +14,9 @@
 #include "llvm/ADT/TinyPtrVector.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/type_traits.h"
 #include "gtest/gtest.h"
 #include <algorithm>
-#include <list>
 #include <vector>
 
 using namespace llvm;
@@ -436,5 +434,26 @@ TEST(TinyPtrVectorTest, ArrayRefCtorTest) {
   EXPECT_FALSE(V.empty());
   for (unsigned i = 0, e = 128; i != e; ++i) {
     EXPECT_TRUE(V[i] == data[i]);
+  }
+}
+
+TEST(TinyPtrVectorTest, MutableArrayRefTest) {
+  int data_array[128];
+  std::vector<int *> data;
+
+  for (unsigned i = 0, e = 128; i != e; ++i) {
+    data_array[i] = 324 - int(i);
+    data.push_back(&data_array[i]);
+  }
+
+  TinyPtrVector<int *> V(data);
+  EXPECT_TRUE(V.size() == 128);
+  EXPECT_FALSE(V.empty());
+
+  MutableArrayRef<int *> mut_array = V;
+  for (unsigned i = 0, e = 128; i != e; ++i) {
+    EXPECT_TRUE(mut_array[i] == data[i]);
+    mut_array[i] = 324 + mut_array[i];
+    EXPECT_TRUE(mut_array[i] == (324 + data[i]));
   }
 }

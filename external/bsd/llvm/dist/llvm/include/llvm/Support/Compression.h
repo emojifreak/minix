@@ -14,12 +14,10 @@
 #ifndef LLVM_SUPPORT_COMPRESSION_H
 #define LLVM_SUPPORT_COMPRESSION_H
 
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/DataTypes.h"
-#include <memory>
 
 namespace llvm {
-
+template <typename T> class SmallVectorImpl;
 class StringRef;
 
 namespace zlib {
@@ -44,6 +42,9 @@ bool isAvailable();
 
 Status compress(StringRef InputBuffer, SmallVectorImpl<char> &CompressedBuffer,
                 CompressionLevel Level = DefaultCompression);
+
+Status uncompress(StringRef InputBuffer, char *UncompressedBuffer,
+                  size_t &UncompressedSize);
 
 Status uncompress(StringRef InputBuffer,
                   SmallVectorImpl<char> &UncompressedBuffer,

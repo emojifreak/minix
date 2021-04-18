@@ -14,46 +14,24 @@
 #ifndef LLVM_IR_BASICBLOCK_H
 #define LLVM_IR_BASICBLOCK_H
 
-#include "llvm/ADT/Twine.h"
 #include "llvm/ADT/ilist.h"
+#include "llvm/ADT/ilist_node.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/SymbolTableListTraits.h"
+#include "llvm/IR/Value.h"
 #include "llvm/Support/CBindingWrapping.h"
-#include "llvm/Support/DataTypes.h"
+#include "llvm-c/Types.h"
+#include <cassert>
+#include <cstddef>
 
 namespace llvm {
 
 class CallInst;
+class Function;
 class LandingPadInst;
-class TerminatorInst;
 class LLVMContext;
-class BlockAddress;
-
-template<> struct ilist_traits<Instruction>
-  : public SymbolTableListTraits<Instruction, BasicBlock> {
-
-  /// \brief Return a node that marks the end of a list.
-  ///
-  /// The sentinel is relative to this instance, so we use a non-static
-  /// method.
-  Instruction *createSentinel() const {
-    // Since i(p)lists always publicly derive from their corresponding traits,
-    // placing a data member in this class will augment the i(p)list.  But since
-    // the NodeTy is expected to be publicly derive from ilist_node<NodeTy>,
-    // there is a legal viable downcast from it to NodeTy. We use this trick to
-    // superimpose an i(p)list with a "ghostly" NodeTy, which becomes the
-    // sentinel. Dereferencing the sentinel is forbidden (save the
-    // ilist_node<NodeTy>), so no one will ever notice the superposition.
-    return static_cast<Instruction*>(&Sentinel);
-  }
-  static void destroySentinel(Instruction*) {}
-
-  Instruction *provideInitialHead() const { return createSentinel(); }
-  Instruction *ensureHead(Instruction*) const { return createSentinel(); }
-  static void noteHead(Instruction*, Instruction*) {}
-private:
-  mutable ilist_half_node<Instruction> Sentinel;
-};
+class TerminatorInst;
 
 /// \brief LLVM Basic Block Representation
 ///
@@ -71,19 +49,18 @@ private:
 /// modifying a program. However, the verifier will ensure that basic blocks
 /// are "well formed".
 class BasicBlock : public Value, // Basic blocks are data objects also
-                   public ilist_node<BasicBlock> {
-  friend class BlockAddress;
+                   public ilist_node_with_parent<BasicBlock, Function> {
 public:
-  typedef iplist<Instruction> InstListType;
+  typedef SymbolTableList<Instruction> InstListType;
+
 private:
+  friend class BlockAddress;
+  friend class SymbolTableListTraits<BasicBlock>;
+
   InstListType InstList;
   Function *Parent;
 
   void setParent(Function *parent);
-  friend class SymbolTableListTraits<BasicBlock, Function>;
-
-  BasicBlock(const BasicBlock &) LLVM_DELETED_FUNCTION;
-  void operator=(const BasicBlock &) LLVM_DELETED_FUNCTION;
 
   /// \brief Constructor.
   ///
@@ -93,7 +70,12 @@ private:
   explicit BasicBlock(LLVMContext &C, const Twine &Name = "",
                       Function *Parent = nullptr,
                       BasicBlock *InsertBefore = nullptr);
+
 public:
+  BasicBlock(const BasicBlock &) = delete;
+  BasicBlock &operator=(const BasicBlock &) = delete;
+  ~BasicBlock() override;
+
   /// \brief Get the context in which this basic block lives.
   LLVMContext &getContext() const;
 
@@ -113,18 +95,30 @@ public:
                             BasicBlock *InsertBefore = nullptr) {
     return new BasicBlock(Context, Name, Parent, InsertBefore);
   }
-  ~BasicBlock();
 
   /// \brief Return the enclosing method, or null if none.
   const Function *getParent() const { return Parent; }
         Function *getParent()       { return Parent; }
 
-  const DataLayout *getDataLayout() const;
+  /// \brief Return the module owning the function this basic block belongs to,
+  /// or nullptr it the function does not have a module.
+  ///
+  /// Note: this is undefined behavior if the block does not have a parent.
+  const Module *getModule() const;
+  Module *getModule();
 
   /// \brief Returns the terminator instruction if the block is well formed or
   /// null if the block is not well formed.
   TerminatorInst *getTerminator();
   const TerminatorInst *getTerminator() const;
+
+  /// \brief Returns the call instruction calling @llvm.experimental.deoptimize
+  /// prior to the terminating return instruction of this basic block, if such a
+  /// call is present.  Otherwise, returns null.
+  CallInst *getTerminatingDeoptimizeCall();
+  const CallInst *getTerminatingDeoptimizeCall() const {
+    return const_cast<BasicBlock *>(this)->getTerminatingDeoptimizeCall();
+  }
 
   /// \brief Returns the call instruction marked 'musttail' prior to the
   /// terminating return instruction of this basic block, if such a call is
@@ -172,7 +166,9 @@ public:
   void removeFromParent();
 
   /// \brief Unlink 'this' from the containing function and delete it.
-  void eraseFromParent();
+  ///
+  // \returns an iterator pointing to the element after the erased one.
+  SymbolTableList<BasicBlock>::iterator eraseFromParent();
 
   /// \brief Unlink this basic block from its current function and insert it
   /// into the function that \p MovePos lives in, right before \p MovePos.
@@ -208,6 +204,24 @@ public:
     return const_cast<BasicBlock*>(this)->getUniquePredecessor();
   }
 
+  /// \brief Return the successor of this block if it has a single successor.
+  /// Otherwise return a null pointer.
+  ///
+  /// This method is analogous to getSinglePredecessor above.
+  BasicBlock *getSingleSuccessor();
+  const BasicBlock *getSingleSuccessor() const {
+    return const_cast<BasicBlock*>(this)->getSingleSuccessor();
+  }
+
+  /// \brief Return the successor of this block if it has a unique successor.
+  /// Otherwise return a null pointer.
+  ///
+  /// This method is analogous to getUniquePredecessor above.
+  BasicBlock *getUniqueSuccessor();
+  const BasicBlock *getUniqueSuccessor() const {
+    return const_cast<BasicBlock*>(this)->getUniqueSuccessor();
+  }
+
   //===--------------------------------------------------------------------===//
   /// Instruction iterator methods
   ///
@@ -236,7 +250,7 @@ public:
         InstListType &getInstList()       { return InstList; }
 
   /// \brief Returns a pointer to a member of the instruction list.
-  static iplist<Instruction> BasicBlock::*getSublistAccess(Instruction*) {
+  static InstListType BasicBlock::*getSublistAccess(Instruction*) {
     return &BasicBlock::InstList;
   }
 
@@ -266,6 +280,8 @@ public:
   /// should be called while the predecessor still refers to this block.
   void removePredecessor(BasicBlock *Pred, bool DontDeleteUselessPHIs = false);
 
+  bool canSplitPredecessors() const;
+
   /// \brief Split the basic block into two basic blocks at the specified
   /// instruction.
   ///
@@ -283,6 +299,9 @@ public:
   /// Also note that this doesn't preserve any passes. To split blocks while
   /// keeping loop information consistent, use the SplitBlock utility function.
   BasicBlock *splitBasicBlock(iterator I, const Twine &BBName = "");
+  BasicBlock *splitBasicBlock(Instruction *I, const Twine &BBName = "") {
+    return splitBasicBlock(I->getIterator(), BBName);
+  }
 
   /// \brief Returns true if there are any uses of this basic block other than
   /// direct branches, switches, etc. to it.
@@ -291,6 +310,9 @@ public:
   /// \brief Update all phi nodes in this basic block's successors to refer to
   /// basic block \p New instead of to it.
   void replaceSuccessorsPhiUsesWith(BasicBlock *New);
+
+  /// \brief Return true if this basic block is an exception handling block.
+  bool isEHPad() const { return getFirstNonPHI()->isEHPad(); }
 
   /// \brief Return true if this basic block is a landing pad.
   ///
@@ -313,6 +335,7 @@ private:
     assert((int)(signed char)getSubclassDataFromValue() >= 0 &&
            "Refcount wrap-around");
   }
+
   /// \brief Shadow Value::setValueSubclassData with a private forwarding method
   /// so that any future subclasses cannot accidentally use it.
   void setValueSubclassData(unsigned short D) {
@@ -323,6 +346,6 @@ private:
 // Create wrappers for C Binding types (see CBindingWrapping.h).
 DEFINE_SIMPLE_CONVERSION_FUNCTIONS(BasicBlock, LLVMBasicBlockRef)
 
-} // End llvm namespace
+} // end namespace llvm
 
-#endif
+#endif // LLVM_IR_BASICBLOCK_H

@@ -20,9 +20,12 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/IR/ValueMap.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include <functional>
 
 namespace llvm {
 
@@ -43,13 +46,21 @@ class DataLayout;
 class Loop;
 class LoopInfo;
 class AllocaInst;
-class AliasAnalysis;
 class AssumptionCacheTracker;
+class DominatorTree;
 
-/// CloneModule - Return an exact copy of the specified module
+/// Return an exact copy of the specified module
 ///
-Module *CloneModule(const Module *M);
-Module *CloneModule(const Module *M, ValueToValueMapTy &VMap);
+std::unique_ptr<Module> CloneModule(const Module *M);
+std::unique_ptr<Module> CloneModule(const Module *M, ValueToValueMapTy &VMap);
+
+/// Return a copy of the specified module. The ShouldCloneDefinition function
+/// controls whether a specific GlobalValue's definition is cloned. If the
+/// function returns false, the module copy will contain an external reference
+/// in place of the global definition.
+std::unique_ptr<Module>
+CloneModule(const Module *M, ValueToValueMapTy &VMap,
+            function_ref<bool(const GlobalValue *)> ShouldCloneDefinition);
 
 /// ClonedCodeInfo - This struct can be used to capture information about code
 /// being cloned, while it is being cloned.
@@ -63,6 +74,11 @@ struct ClonedCodeInfo {
   /// the entry block or they are in the entry block but are not a constant
   /// size.
   bool ContainsDynamicAllocas;
+
+  /// All cloned call sites that have operand bundles attached are appended to
+  /// this vector.  This vector may contain nulls or undefs if some of the
+  /// originally inserted callsites were DCE'ed after they were cloned.
+  std::vector<WeakVH> OperandBundleCallSites;
 
   ClonedCodeInfo() : ContainsCalls(false), ContainsDynamicAllocas(false) {}
 };
@@ -95,26 +111,23 @@ struct ClonedCodeInfo {
 /// function, you can specify a ClonedCodeInfo object with the optional fifth
 /// parameter.
 ///
-BasicBlock *CloneBasicBlock(const BasicBlock *BB,
-                            ValueToValueMapTy &VMap,
+BasicBlock *CloneBasicBlock(const BasicBlock *BB, ValueToValueMapTy &VMap,
                             const Twine &NameSuffix = "", Function *F = nullptr,
                             ClonedCodeInfo *CodeInfo = nullptr);
 
-/// CloneFunction - Return a copy of the specified function, but without
-/// embedding the function into another module.  Also, any references specified
-/// in the VMap are changed to refer to their mapped value instead of the
-/// original one.  If any of the arguments to the function are in the VMap,
-/// the arguments are deleted from the resultant function.  The VMap is
-/// updated to include mappings from all of the instructions and basicblocks in
-/// the function from their old to new values.  The final argument captures
-/// information about the cloned code if non-null.
+/// CloneFunction - Return a copy of the specified function and add it to that
+/// function's module.  Also, any references specified in the VMap are changed
+/// to refer to their mapped value instead of the original one.  If any of the
+/// arguments to the function are in the VMap, the arguments are deleted from
+/// the resultant function.  The VMap is updated to include mappings from all of
+/// the instructions and basicblocks in the function from their old to new
+/// values.  The final argument captures information about the cloned code if
+/// non-null.
 ///
-/// If ModuleLevelChanges is false, VMap contains no non-identity GlobalValue
-/// mappings, and debug info metadata will not be cloned.
+/// VMap contains no non-identity GlobalValue mappings and debug info metadata
+/// will not be cloned.
 ///
-Function *CloneFunction(const Function *F,
-                        ValueToValueMapTy &VMap,
-                        bool ModuleLevelChanges,
+Function *CloneFunction(Function *F, ValueToValueMapTy &VMap,
                         ClonedCodeInfo *CodeInfo = nullptr);
 
 /// Clone OldFunc into NewFunc, transforming the old arguments into references
@@ -127,13 +140,19 @@ Function *CloneFunction(const Function *F,
 /// mappings.
 ///
 void CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
-                       ValueToValueMapTy &VMap,
-                       bool ModuleLevelChanges,
+                       ValueToValueMapTy &VMap, bool ModuleLevelChanges,
                        SmallVectorImpl<ReturnInst*> &Returns,
                        const char *NameSuffix = "",
                        ClonedCodeInfo *CodeInfo = nullptr,
                        ValueMapTypeRemapper *TypeMapper = nullptr,
                        ValueMaterializer *Materializer = nullptr);
+
+void CloneAndPruneIntoFromInst(Function *NewFunc, const Function *OldFunc,
+                               const Instruction *StartingInst,
+                               ValueToValueMapTy &VMap, bool ModuleLevelChanges,
+                               SmallVectorImpl<ReturnInst *> &Returns,
+                               const char *NameSuffix = "",
+                               ClonedCodeInfo *CodeInfo = nullptr);
 
 /// CloneAndPruneFunctionInto - This works exactly like CloneFunctionInto,
 /// except that it does some simple constant prop and DCE on the fly.  The
@@ -147,12 +166,10 @@ void CloneFunctionInto(Function *NewFunc, const Function *OldFunc,
 /// mappings.
 ///
 void CloneAndPruneFunctionInto(Function *NewFunc, const Function *OldFunc,
-                               ValueToValueMapTy &VMap,
-                               bool ModuleLevelChanges,
+                               ValueToValueMapTy &VMap, bool ModuleLevelChanges,
                                SmallVectorImpl<ReturnInst*> &Returns,
                                const char *NameSuffix = "",
                                ClonedCodeInfo *CodeInfo = nullptr,
-                               const DataLayout *DL = nullptr,
                                Instruction *TheCall = nullptr);
 
 /// InlineFunctionInfo - This class captures the data input to the
@@ -160,29 +177,34 @@ void CloneAndPruneFunctionInto(Function *NewFunc, const Function *OldFunc,
 class InlineFunctionInfo {
 public:
   explicit InlineFunctionInfo(CallGraph *cg = nullptr,
-                              const DataLayout *DL = nullptr,
-                              AliasAnalysis *AA = nullptr,
-                              AssumptionCacheTracker *ACT = nullptr)
-      : CG(cg), DL(DL), AA(AA), ACT(ACT) {}
+                              std::function<AssumptionCache &(Function &)>
+                                  *GetAssumptionCache = nullptr)
+      : CG(cg), GetAssumptionCache(GetAssumptionCache) {}
 
   /// CG - If non-null, InlineFunction will update the callgraph to reflect the
   /// changes it makes.
   CallGraph *CG;
-  const DataLayout *DL;
-  AliasAnalysis *AA;
-  AssumptionCacheTracker *ACT;
+  std::function<AssumptionCache &(Function &)> *GetAssumptionCache;
 
   /// StaticAllocas - InlineFunction fills this in with all static allocas that
   /// get copied into the caller.
-  SmallVector<AllocaInst*, 4> StaticAllocas;
+  SmallVector<AllocaInst *, 4> StaticAllocas;
 
   /// InlinedCalls - InlineFunction fills this in with callsites that were
   /// inlined from the callee.  This is only filled in if CG is non-null.
   SmallVector<WeakVH, 8> InlinedCalls;
 
+  /// All of the new call sites inlined into the caller.
+  ///
+  /// 'InlineFunction' fills this in by scanning the inlined instructions, and
+  /// only if CG is null. If CG is non-null, instead the value handle
+  /// `InlinedCalls` above is used.
+  SmallVector<CallSite, 8> InlinedCallSites;
+
   void reset() {
     StaticAllocas.clear();
     InlinedCalls.clear();
+    InlinedCallSites.clear();
   }
 };
 
@@ -196,9 +218,32 @@ public:
 /// exists in the instruction stream.  Similarly this will inline a recursive
 /// function by one level.
 ///
-bool InlineFunction(CallInst *C, InlineFunctionInfo &IFI, bool InsertLifetime = true);
-bool InlineFunction(InvokeInst *II, InlineFunctionInfo &IFI, bool InsertLifetime = true);
-bool InlineFunction(CallSite CS, InlineFunctionInfo &IFI, bool InsertLifetime = true);
+/// Note that while this routine is allowed to cleanup and optimize the
+/// *inlined* code to minimize the actual inserted code, it must not delete
+/// code in the caller as users of this routine may have pointers to
+/// instructions in the caller that need to remain stable.
+bool InlineFunction(CallInst *C, InlineFunctionInfo &IFI,
+                    AAResults *CalleeAAR = nullptr, bool InsertLifetime = true);
+bool InlineFunction(InvokeInst *II, InlineFunctionInfo &IFI,
+                    AAResults *CalleeAAR = nullptr, bool InsertLifetime = true);
+bool InlineFunction(CallSite CS, InlineFunctionInfo &IFI,
+                    AAResults *CalleeAAR = nullptr, bool InsertLifetime = true);
+
+/// \brief Clones a loop \p OrigLoop.  Returns the loop and the blocks in \p
+/// Blocks.
+///
+/// Updates LoopInfo and DominatorTree assuming the loop is dominated by block
+/// \p LoopDomBB.  Insert the new blocks before block specified in \p Before.
+/// Note: Only innermost loops are supported.
+Loop *cloneLoopWithPreheader(BasicBlock *Before, BasicBlock *LoopDomBB,
+                             Loop *OrigLoop, ValueToValueMapTy &VMap,
+                             const Twine &NameSuffix, LoopInfo *LI,
+                             DominatorTree *DT,
+                             SmallVectorImpl<BasicBlock *> &Blocks);
+
+/// \brief Remaps instructions in \p Blocks using the mapping in \p VMap.
+void remapInstructionsInBlocks(const SmallVectorImpl<BasicBlock *> &Blocks,
+                               ValueToValueMapTy &VMap);
 
 } // End llvm namespace
 

@@ -1,8 +1,6 @@
-#	$NetBSD: Makefile,v 1.30 2015/01/29 20:41:36 joerg Exp $
+#	$NetBSD: Makefile,v 1.33 2017/01/11 12:02:31 joerg Exp $
 
 LIB=	LLVMSupport
-
-NOGCCERROR=	yes
 
 .include <bsd.init.mk>
 
@@ -16,30 +14,31 @@ SRCS+=	APFloat.cpp \
 	Allocator.cpp \
 	BlockFrequency.cpp \
 	BranchProbability.cpp \
-	circular_raw_ostream.cpp \
+	COM.cpp \
+	CachePruning.cpp \
+	Chrono.cpp \
 	CommandLine.cpp \
 	Compression.cpp \
-	ConvertUTF.c \
+	ConvertUTF.cpp \
 	ConvertUTFWrapper.cpp \
 	CrashRecoveryContext.cpp \
 	DataExtractor.cpp \
-	DataStream.cpp \
 	Debug.cpp \
 	DeltaAlgorithm.cpp \
 	DAGDeltaAlgorithm.cpp \
 	Dwarf.cpp \
+	Error.cpp \
 	ErrorHandling.cpp \
 	FileOutputBuffer.cpp \
 	FileUtilities.cpp \
 	FoldingSet.cpp \
 	FormattedStream.cpp \
+	GlobPattern.cpp \
 	GraphWriter.cpp \
 	Hashing.cpp \
 	IntEqClasses.cpp \
 	IntervalMap.cpp \
-	IntrusiveRefCntPtr.cpp \
-	IsInf.cpp \
-	IsNAN.cpp \
+	JamCRC.cpp \
 	LEB128.cpp \
 	LineIterator.cpp \
 	Locale.cpp \
@@ -48,23 +47,28 @@ SRCS+=	APFloat.cpp \
 	ManagedStatic.cpp \
 	MathExtras.cpp \
 	MemoryBuffer.cpp \
-	MemoryObject.cpp \
+	NativeFormatting.cpp \
 	Options.cpp \
 	PluginLoader.cpp \
 	PrettyStackTrace.cpp \
 	Regex.cpp \
+	SHA1.cpp \
+	ScopedPrinter.cpp \
 	SmallPtrSet.cpp \
 	SmallVector.cpp \
 	SourceMgr.cpp \
 	SpecialCaseList.cpp \
 	Statistic.cpp \
-	StreamingMemoryObject.cpp \
 	StringExtras.cpp \
 	StringMap.cpp \
 	StringPool.cpp \
 	StringRef.cpp \
+	StringSaver.cpp \
 	SystemUtils.cpp \
+	TarWriter.cpp \
+	TargetParser.cpp \
 	TargetRegistry.cpp \
+	TrigramIndex.cpp \
 	Timer.cpp \
 	ToolOutputFile.cpp \
 	Triple.cpp \
@@ -73,17 +77,20 @@ SRCS+=	APFloat.cpp \
 	Watchdog.cpp \
 	YAMLParser.cpp \
 	YAMLTraits.cpp \
+	circular_raw_ostream.cpp \
 	raw_os_ostream.cpp \
 	raw_ostream.cpp \
 	regcomp.c \
 	regerror.c \
 	regexec.c \
 	regfree.c \
-	regstrlcpy.c
+	regstrlcpy.c \
+	xxhash.cpp
 
 SRCS+=	Atomic.cpp \
 	DynamicLibrary.cpp \
 	Errno.cpp \
+	FormatVariadic.cpp \
 	Host.cpp \
 	Memory.cpp \
 	Mutex.cpp \
@@ -96,8 +103,8 @@ SRCS+=	Atomic.cpp \
 	SearchForAddressOfSpecialSymbol.cpp \
 	Signals.cpp \
 	ThreadLocal.cpp \
+	ThreadPool.cpp \
 	Threading.cpp \
-	TimeValue.cpp \
 	Valgrind.cpp
 
 .PATH: ${LLVM_SRCDIR}/lib/Support/Unix
@@ -111,8 +118,7 @@ SRCS+=	Host.inc \
 	RWMutex.inc \
 	Signals.inc \
 	Watchdog.inc \
-	ThreadLocal.inc \
-	TimeValue.inc
+	ThreadLocal.inc
 
 .for src in ${SRCS:M*.c}
 CPPFLAGS.${src}+=	-std=gnu99

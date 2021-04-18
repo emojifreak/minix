@@ -30,7 +30,7 @@
 // CHECK: movl	%eax, -16(%ebp)          # encoding: [0x67,0x66,0x89,0x45,0xf0]
 	movl	%eax, -16(%ebp)
 
-// CHECK: testb	%bl, %cl                # encoding: [0x84,0xcb]
+// CHECK: testb	%bl, %cl                # encoding: [0x84,0xd9]
         testb %bl, %cl
 
 // CHECK: cmpl	%eax, %ebx              # encoding: [0x66,0x39,0xc3]
@@ -256,10 +256,22 @@ cmovnae	%bx,%bx
 // CHECK:  encoding: [0x67,0x8c,0x08]
         movw %cs, (%eax)
 
-// CHECK: movl	%eax, %cs
-// CHECK:  encoding: [0x66,0x8e,0xc8]
+// CHECK: movw	%ax, %cs
+// CHECK:  encoding: [0x8e,0xc8]
         movl %eax, %cs
 
+// CHECK: movw	%ax, %cs
+// CHECK:  encoding: [0x8e,0xc8]
+        mov %eax, %cs	
+
+// CHECK: movw	%ax, %cs
+// CHECK:  encoding: [0x8e,0xc8]
+        movw %ax, %cs
+
+// CHECK: movw	%ax, %cs
+// CHECK:  encoding: [0x8e,0xc8]
+        mov %ax, %cs		
+	
 // CHECK: movl	(%eax), %cs
 // CHECK:  encoding: [0x67,0x66,0x8e,0x08]
         movl (%eax), %cs

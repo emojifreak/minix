@@ -12,7 +12,7 @@ void bar() {
 }
 // CHECK-LABEL: define void @_ZN7trivial3barEv()
 // CHECK: alloca %"struct.trivial::A"
-// CHECK: load i8**
+// CHECK: load i8*, i8**
 // CHECK: call void @_ZN7trivial3fooENS_1AE(i8* %{{.*}})
 // CHECK-LABEL: declare void @_ZN7trivial3fooENS_1AE(i8*)
 
@@ -33,7 +33,7 @@ void bar() {
 // CHECK-LABEL: define void @_ZN12default_ctor3barEv()
 // CHECK: alloca %"struct.default_ctor::A"
 // CHECK: call void @_Z{{.*}}C1Ev(
-// CHECK: load i8**
+// CHECK: load i8*, i8**
 // CHECK: call void @_ZN12default_ctor3fooENS_1AE(i8* %{{.*}})
 // CHECK-LABEL: declare void @_ZN12default_ctor3fooENS_1AE(i8*)
 
@@ -76,7 +76,7 @@ void bar() {
 // FIXME: The copy ctor is deleted.
 // CHECK-DISABLED-LABEL: define void @_ZN11all_deleted3barEv()
 // CHECK-DISABLED: call void @_Z{{.*}}C1Ev(
-// CHECK-DISABLED-NOT call
+// CHECK-DISABLED-NOT: call
 // CHECK-DISABLED: call void @_ZN11all_deleted3fooENS_1AE(%"struct.all_deleted::A"* %{{.*}})
 // CHECK-DISABLED-LABEL: declare void @_ZN11all_deleted3fooENS_1AE(%"struct.all_deleted::A"*)
 
@@ -96,7 +96,7 @@ void bar() {
 // FIXME: The copy and move ctors are implicitly deleted.
 // CHECK-DISABLED-LABEL: define void @_ZN18implicitly_deleted3barEv()
 // CHECK-DISABLED: call void @_Z{{.*}}C1Ev(
-// CHECK-DISABLED-NOT call
+// CHECK-DISABLED-NOT: call
 // CHECK-DISABLED: call void @_ZN18implicitly_deleted3fooENS_1AE(%"struct.implicitly_deleted::A"* %{{.*}})
 // CHECK-DISABLED-LABEL: declare void @_ZN18implicitly_deleted3fooENS_1AE(%"struct.implicitly_deleted::A"*)
 
@@ -116,7 +116,7 @@ void bar() {
 // FIXME: The copy constructor is implicitly deleted.
 // CHECK-DISABLED-LABEL: define void @_ZN11one_deleted3barEv()
 // CHECK-DISABLED: call void @_Z{{.*}}C1Ev(
-// CHECK-DISABLED-NOT call
+// CHECK-DISABLED-NOT: call
 // CHECK-DISABLED: call void @_ZN11one_deleted3fooENS_1AE(%"struct.one_deleted::A"* %{{.*}})
 // CHECK-DISABLED-LABEL: declare void @_ZN11one_deleted3fooENS_1AE(%"struct.one_deleted::A"*)
 
@@ -136,7 +136,7 @@ void bar() {
 }
 // CHECK-LABEL: define void @_ZN14copy_defaulted3barEv()
 // CHECK: call void @_Z{{.*}}C1Ev(
-// CHECK: load i8**
+// CHECK: load i8*, i8**
 // CHECK: call void @_ZN14copy_defaulted3fooENS_1AE(i8* %{{.*}})
 // CHECK-LABEL: declare void @_ZN14copy_defaulted3fooENS_1AE(i8*)
 
@@ -156,7 +156,7 @@ void bar() {
 }
 // CHECK-LABEL: define void @_ZN14move_defaulted3barEv()
 // CHECK: call void @_Z{{.*}}C1Ev(
-// CHECK: load i8**
+// CHECK: load i8*, i8**
 // CHECK: call void @_ZN14move_defaulted3fooENS_1AE(i8* %{{.*}})
 // CHECK-LABEL: declare void @_ZN14move_defaulted3fooENS_1AE(i8*)
 
@@ -175,7 +175,7 @@ void bar() {
 }
 // CHECK-LABEL: define void @_ZN17trivial_defaulted3barEv()
 // CHECK: call void @_Z{{.*}}C1Ev(
-// CHECK: load i8**
+// CHECK: load i8*, i8**
 // CHECK: call void @_ZN17trivial_defaulted3fooENS_1AE(i8* %{{.*}})
 // CHECK-LABEL: declare void @_ZN17trivial_defaulted3fooENS_1AE(i8*)
 
@@ -203,4 +203,78 @@ void bar() {
 // CHECK-DISABLED-LABEL: declare void @_ZN14two_copy_ctors3fooENS_1BE(%"struct.two_copy_ctors::B"*)
 
 // WIN64-LABEL: declare void @"\01?foo@two_copy_ctors@@YAXUB@1@@Z"(%"struct.two_copy_ctors::B"*)
+}
+
+namespace definition_only {
+struct A {
+  A();
+  A(A &&o);
+  void *p;
+};
+void *foo(A a) { return a.p; }
+// WIN64-LABEL: define i8* @"\01?foo@definition_only@@YAPEAXUA@1@@Z"(%"struct.definition_only::A"*
+}
+
+namespace deleted_by_member {
+struct B {
+  B();
+  B(B &&o);
+  void *p;
+};
+struct A {
+  A();
+  B b;
+};
+void *foo(A a) { return a.b.p; }
+// WIN64-LABEL: define i8* @"\01?foo@deleted_by_member@@YAPEAXUA@1@@Z"(%"struct.deleted_by_member::A"*
+}
+
+namespace deleted_by_base {
+struct B {
+  B();
+  B(B &&o);
+  void *p;
+};
+struct A : B {
+  A();
+};
+void *foo(A a) { return a.p; }
+// WIN64-LABEL: define i8* @"\01?foo@deleted_by_base@@YAPEAXUA@1@@Z"(%"struct.deleted_by_base::A"*
+}
+
+namespace deleted_by_member_copy {
+struct B {
+  B();
+  B(const B &o) = delete;
+  void *p;
+};
+struct A {
+  A();
+  B b;
+};
+void *foo(A a) { return a.b.p; }
+// WIN64-LABEL: define i8* @"\01?foo@deleted_by_member_copy@@YAPEAXUA@1@@Z"(%"struct.deleted_by_member_copy::A"*
+}
+
+namespace deleted_by_base_copy {
+struct B {
+  B();
+  B(const B &o) = delete;
+  void *p;
+};
+struct A : B {
+  A();
+};
+void *foo(A a) { return a.p; }
+// WIN64-LABEL: define i8* @"\01?foo@deleted_by_base_copy@@YAPEAXUA@1@@Z"(%"struct.deleted_by_base_copy::A"*
+}
+
+namespace explicit_delete {
+struct A {
+  A();
+  A(const A &o) = delete;
+  void *p;
+};
+// WIN64-LABEL: define i8* @"\01?foo@explicit_delete@@YAPEAXUA@1@@Z"(%"struct.explicit_delete::A"*
+void *foo(A a) { return a.p; }
 }

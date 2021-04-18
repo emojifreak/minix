@@ -444,11 +444,11 @@ namespace r150682 {
 
   template<typename X>
   void tfn() {
-    new (*(PlacementArg*)0) T[1];
+    new (*(PlacementArg*)0) T[1]; // expected-warning 2 {{binding dereferenced null pointer to reference has undefined behavior}}
   }
 
   void fn() {
-    tfn<int>();
+    tfn<int>();  // expected-note {{in instantiation of function template specialization 'r150682::tfn<int>' requested here}}
   }
 
 }
@@ -524,3 +524,11 @@ namespace PR18544 {
 
 // PR19968
 inline void* operator new(); // expected-error {{'operator new' must have at least one parameter}}
+
+namespace {
+template <class C>
+struct A {
+  void f() { this->::new; } // expected-error {{expected unqualified-id}}
+  void g() { this->::delete; } // expected-error {{expected unqualified-id}}
+};
+}

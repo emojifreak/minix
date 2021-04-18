@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ASTReaderInternals.h"
+#include "clang/Frontend/PCHContainerOperations.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Serialization/ASTBitCodes.h"
@@ -244,12 +245,8 @@ GlobalModuleIndex::readIndex(StringRef Path) {
     return std::make_pair(nullptr, EC_NotFound);
   std::unique_ptr<llvm::MemoryBuffer> Buffer = std::move(BufferOrErr.get());
 
-  /// \brief The bitstream reader from which we'll read the AST file.
-  llvm::BitstreamReader Reader((const unsigned char *)Buffer->getBufferStart(),
-                               (const unsigned char *)Buffer->getBufferEnd());
-
   /// \brief The main bitstream cursor for the main block.
-  llvm::BitstreamCursor Cursor(Reader);
+  llvm::BitstreamCursor Cursor(*Buffer);
 
   // Sniff for the signature.
   if (Cursor.Read(8) != 'B' ||
@@ -353,7 +350,7 @@ void GlobalModuleIndex::printStats() {
   std::fprintf(stderr, "\n");
 }
 
-void GlobalModuleIndex::dump() {
+LLVM_DUMP_METHOD void GlobalModuleIndex::dump() {
   llvm::errs() << "*** Global Module Index Dump:\n";
   llvm::errs() << "Module files:\n";
   for (auto &MI : Modules) {
@@ -384,6 +381,7 @@ namespace {
   /// \brief Builder that generates the global module index file.
   class GlobalModuleIndexBuilder {
     FileManager &FileMgr;
+    const PCHContainerReader &PCHContainerRdr;
 
     /// \brief Mapping from files to module file information.
     typedef llvm::MapVector<const FileEntry *, ModuleFileInfo> ModuleFilesMap;
@@ -416,7 +414,9 @@ namespace {
     }
 
   public:
-    explicit GlobalModuleIndexBuilder(FileManager &FileMgr) : FileMgr(FileMgr){}
+    explicit GlobalModuleIndexBuilder(
+        FileManager &FileMgr, const PCHContainerReader &PCHContainerRdr)
+        : FileMgr(FileMgr), PCHContainerRdr(PCHContainerRdr) {}
 
     /// \brief Load the contents of the given module file into the builder.
     ///
@@ -456,7 +456,7 @@ static void emitRecordID(unsigned ID, const char *Name,
 void
 GlobalModuleIndexBuilder::emitBlockInfoBlock(llvm::BitstreamWriter &Stream) {
   SmallVector<uint64_t, 64> Record;
-  Stream.EnterSubblock(llvm::bitc::BLOCKINFO_BLOCK_ID, 3);
+  Stream.EnterBlockInfoBlock();
 
 #define BLOCK(X) emitBlockID(X ## _ID, #X, Stream, Record)
 #define RECORD(X) emitRecordID(X, #X, Stream, Record)
@@ -500,10 +500,7 @@ bool GlobalModuleIndexBuilder::loadModuleFile(const FileEntry *File) {
   }
 
   // Initialize the input stream
-  llvm::BitstreamReader InStreamFile;
-  InStreamFile.init((const unsigned char *)(*Buffer)->getBufferStart(),
-                    (const unsigned char *)(*Buffer)->getBufferEnd());
-  llvm::BitstreamCursor InStream(InStreamFile);
+  llvm::BitstreamCursor InStream(PCHContainerRdr.ExtractPCH(**Buffer));
 
   // Sniff for the signature.
   if (InStream.Read(8) != 'C' ||
@@ -747,24 +744,24 @@ void GlobalModuleIndexBuilder::writeIndex(llvm::BitstreamWriter &Stream) {
     }
 
     // Create a blob abbreviation
-    BitCodeAbbrev *Abbrev = new BitCodeAbbrev();
+    auto Abbrev = std::make_shared<BitCodeAbbrev>();
     Abbrev->Add(BitCodeAbbrevOp(IDENTIFIER_INDEX));
     Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32));
     Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob));
-    unsigned IDTableAbbrev = Stream.EmitAbbrev(Abbrev);
+    unsigned IDTableAbbrev = Stream.EmitAbbrev(std::move(Abbrev));
 
     // Write the identifier table
-    Record.clear();
-    Record.push_back(IDENTIFIER_INDEX);
-    Record.push_back(BucketOffset);
-    Stream.EmitRecordWithBlob(IDTableAbbrev, Record, IdentifierTable.str());
+    uint64_t Record[] = {IDENTIFIER_INDEX, BucketOffset};
+    Stream.EmitRecordWithBlob(IDTableAbbrev, Record, IdentifierTable);
   }
 
   Stream.ExitBlock();
 }
 
 GlobalModuleIndex::ErrorCode
-GlobalModuleIndex::writeIndex(FileManager &FileMgr, StringRef Path) {
+GlobalModuleIndex::writeIndex(FileManager &FileMgr,
+                              const PCHContainerReader &PCHContainerRdr,
+                              StringRef Path) {
   llvm::SmallString<128> IndexPath;
   IndexPath += Path;
   llvm::sys::path::append(IndexPath, IndexFileName);
@@ -787,8 +784,8 @@ GlobalModuleIndex::writeIndex(FileManager &FileMgr, StringRef Path) {
   }
 
   // The module index builder.
-  GlobalModuleIndexBuilder Builder(FileMgr);
-  
+  GlobalModuleIndexBuilder Builder(FileMgr, PCHContainerRdr);
+
   // Load each of the module files.
   std::error_code EC;
   for (llvm::sys::fs::directory_iterator D(Path, EC), DEnd;
@@ -841,12 +838,12 @@ GlobalModuleIndex::writeIndex(FileManager &FileMgr, StringRef Path) {
     return EC_IOError;
 
   // Remove the old index file. It isn't relevant any more.
-  llvm::sys::fs::remove(IndexPath.str());
+  llvm::sys::fs::remove(IndexPath);
 
   // Rename the newly-written index file to the proper name.
-  if (llvm::sys::fs::rename(IndexTmpPath.str(), IndexPath.str())) {
+  if (llvm::sys::fs::rename(IndexTmpPath, IndexPath)) {
     // Rename failed; just remove the 
-    llvm::sys::fs::remove(IndexTmpPath.str());
+    llvm::sys::fs::remove(IndexTmpPath);
     return EC_IOError;
   }
 

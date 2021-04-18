@@ -13,7 +13,7 @@
 //
 // In particular, just wrap your code with the DEBUG() macro, and it will be
 // enabled automatically if you specify '-debug' on the command-line.
-// Alternatively, you can also define the DEBUG_TYPE macro to "foo" specify
+// DEBUG() requires the DEBUG_TYPE macro to be defined. Set it to "foo" specify
 // that your debug code belongs to class "foo". Be careful that you only do
 // this after including Debug.h and not around any #include of headers. Headers
 // should define and undef the macro acround the code that needs to use the
@@ -28,9 +28,9 @@
 #ifndef LLVM_SUPPORT_DEBUG_H
 #define LLVM_SUPPORT_DEBUG_H
 
-#include "llvm/Support/raw_ostream.h"
-
 namespace llvm {
+
+class raw_ostream;
 
 #ifndef NDEBUG
 /// DebugFlag - This boolean is set to true if the '-debug' command line option
@@ -51,6 +51,12 @@ bool isCurrentDebugType(const char *Type);
 ///
 void setCurrentDebugType(const char *Type);
 
+/// setCurrentDebugTypes - Set the current debug type, as if the
+/// -debug-only=X,Y,Z option were specified. Note that DebugFlag
+/// also needs to be set to true for debug output to be produced.
+///
+void setCurrentDebugTypes(const char **Types, unsigned Count);
+
 /// DEBUG_WITH_TYPE macro - This macro should be used by passes to emit debug
 /// information.  In the '-debug' option is specified on the commandline, and if
 /// this is a debug build, then the code specified as the option to the macro
@@ -62,12 +68,13 @@ void setCurrentDebugType(const char *Type);
 /// is not specified, or is specified as "bitset".
 #define DEBUG_WITH_TYPE(TYPE, X)                                        \
   do { if (::llvm::DebugFlag && ::llvm::isCurrentDebugType(TYPE)) { X; } \
-  } while (0)
+  } while (false)
 
 #else
 #define isCurrentDebugType(X) (false)
 #define setCurrentDebugType(X)
-#define DEBUG_WITH_TYPE(TYPE, X) do { } while (0)
+#define setCurrentDebugTypes(X, N)
+#define DEBUG_WITH_TYPE(TYPE, X) do { } while (false)
 #endif
 
 /// EnableDebugBuffering - This defaults to false.  If true, the debug
@@ -92,6 +99,6 @@ raw_ostream &dbgs();
 //
 #define DEBUG(X) DEBUG_WITH_TYPE(DEBUG_TYPE, X)
 
-} // End llvm namespace
+} // end namespace llvm
 
-#endif
+#endif // LLVM_SUPPORT_DEBUG_H

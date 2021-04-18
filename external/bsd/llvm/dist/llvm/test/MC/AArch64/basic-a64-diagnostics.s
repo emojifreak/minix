@@ -75,19 +75,19 @@
 // Add/sub (immediate)
 //------------------------------------------------------------------------------
 
-// Out of range immediates: < 0 or more than 12 bits
-        add w4, w5, #-1
+// Out of range immediates: more than 12 bits
+        add w4, w5, #-4096
         add w5, w6, #0x1000
-        add w4, w5, #-1, lsl #12
+        add w4, w5, #-4096, lsl #12
         add w5, w6, #0x1000, lsl #12
 // CHECK-ERROR: error: expected compatible register, symbol or integer in range [0, 4095]
-// CHECK-ERROR-NEXT:         add w4, w5, #-1
+// CHECK-ERROR-NEXT:         add w4, w5, #-4096
 // CHECK-ERROR-NEXT:                     ^
 // CHECK-ERROR-AARCH64-NEXT: error: expected compatible register, symbol or integer in range [0, 4095]
 // CHECK-ERROR-AARCH64-NEXT:         add w5, w6, #0x1000
 // CHECK-ERROR-AARCH64-NEXT:                     ^
 // CHECK-ERROR-NEXT: error: expected compatible register, symbol or integer in range [0, 4095]
-// CHECK-ERROR-NEXT:         add w4, w5, #-1, lsl #12
+// CHECK-ERROR-NEXT:         add w4, w5, #-4096, lsl #12
 // CHECK-ERROR-NEXT:                     ^
 // CHECK-ERROR-NEXT: error: expected compatible register, symbol or integer in range [0, 4095]
 // CHECK-ERROR-NEXT:         add w5, w6, #0x1000, lsl #12
@@ -172,9 +172,14 @@
 
         // A relocation should be provided for symbols
         add x3, x9, #variable
+        add x3, x9, #variable-16
 // CHECK-ERROR: error: expected compatible register, symbol or integer in range [0, 4095]
 // CHECK-ERROR-NEXT:         add x3, x9, #variable
 // CHECK-ERROR-NEXT:                      ^
+// CHECK-ERROR-NEXT: error: expected compatible register, symbol or integer in range [0, 4095]
+// CHECK-ERROR-NEXT:         add x3, x9, #variable-16
+// CHECK-ERROR-NEXT:                 ^
+
 
 
 //------------------------------------------------------------------------------
@@ -1088,6 +1093,23 @@
 // CHECK-ERROR-NEXT:         ubfx w3, wsp, #10, #8
 // CHECK-ERROR-NEXT:                  ^
 
+        bfc wsp, #3, #6
+        bfc w4, #2, #31
+        bfc sp, #0, #1
+        bfc x6, #0, #0
+// CHECK-ERROR: error: invalid operand for instruction
+// CHECK-ERROR-NEXT:        bfc wsp, #3, #6
+// CHECK-ERROR-NEXT:            ^
+// CHECK-ERROR-NEXT: error: requested insert overflows register
+// CHECK-ERROR-NEXT:         bfc w4, #2, #31
+// CHECK-ERROR-NEXT:                     ^
+// CHECK-ERROR-NEXT: error: invalid operand for instruction
+// CHECK-ERROR-NEXT:         bfc sp, #0, #1
+// CHECK-ERROR-NEXT:             ^
+// CHECK-ERROR-NEXT: error: expected integer in range [1, 32]
+// CHECK-ERROR-NEXT:         bfc x6, #0, #0
+// CHECK-ERROR-NEXT:                     ^
+
 //------------------------------------------------------------------------------
 // Compare & branch (immediate)
 //------------------------------------------------------------------------------
@@ -1586,7 +1608,7 @@
 // CHECK-ERROR: error: invalid operand for instruction
 // CHECK-ERROR-NEXT:         fcsel q3, q20, q9, pl
 // CHECK-ERROR-NEXT:               ^
-// CHECK-ERROR-NEXT: error: invalid operand for instruction
+// CHECK-ERROR-NEXT: error: instruction requires: fullfp16
 // CHECK-ERROR-NEXT:         fcsel h9, h10, h11, mi
 // CHECK-ERROR-NEXT:               ^
 // CHECK-ERROR-NEXT: error: invalid operand for instruction
@@ -1635,7 +1657,7 @@
 // CHECK-ERROR: error: invalid operand for instruction
 // CHECK-ERROR-NEXT:         fmadd b3, b4, b5, b6
 // CHECK-ERROR-NEXT:               ^
-// CHECK-ERROR-NEXT: error: invalid operand for instruction
+// CHECK-ERROR-NEXT: error: instruction requires: fullfp16
 // CHECK-ERROR-NEXT:         fmsub h1, h2, h3, h4
 // CHECK-ERROR-NEXT:               ^
 // CHECK-ERROR-NEXT: error: invalid operand for instruction
@@ -3265,18 +3287,10 @@
         msr spsel, #-1
         msr spsel #-1
         msr daifclr, #16
-// CHECK-ERROR-NEXT: error: {{expected|immediate must be an}} integer in range [0, 15]
-// CHECK-ERROR-NEXT:         msr daifset, x4
-// CHECK-ERROR-NEXT:                      ^
-// CHECK-ERROR-NEXT: error: {{expected|immediate must be an}} integer in range [0, 15]
-// CHECK-ERROR-NEXT:         msr spsel, #-1
-// CHECK-ERROR-NEXT:                    ^
-// CHECK-ERROR-NEXT: error: {{expected comma before next operand|unexpected token in argument list}}
-// CHECK-ERROR-NEXT:         msr spsel #-1
-// CHECK-ERROR-NEXT:                   ^
-// CHECK-ERROR-NEXT: error: {{expected|immediate must be an}} integer in range [0, 15]
-// CHECK-ERROR-NEXT:         msr daifclr, #16
-// CHECK-ERROR-NEXT:                      ^
+// CHECK-ERROR: [[@LINE-4]]:22: error: {{expected|immediate must be an}} integer in range [0, 15]
+// CHECK-ERROR: [[@LINE-4]]:20: error: {{expected|immediate must be an}} integer in range [0, 15]
+// CHECK-ERROR: [[@LINE-4]]:{{9|19}}: error: {{too few operands for instruction|expected comma before next operand|unexpected token in argument list}}
+// CHECK-ERROR: [[@LINE-4]]:22: error: {{expected|immediate must be an}} integer in range [0, 15]
 
         sys #8, c1, c2, #7, x9
         sys #3, c16, c2, #3, x10
@@ -3286,7 +3300,7 @@
         sysl x13, #3, c16, c2, #3
         sysl x9, #2, c11, c16, #5
         sysl x4, #4, c9, c8, #8
-// CHECK-ERROR-NEXT: error:  {{expected|immediate must be an}} integer in range [0, 7]
+// CHECK-ERROR: error:  {{expected|immediate must be an}} integer in range [0, 7]
 // CHECK-ERROR-NEXT:         sys #8, c1, c2, #7, x9
 // CHECK-ERROR-NEXT:             ^
 // CHECK-ERROR-NEXT: error: Expected cN operand where 0 <= N <= 15
@@ -3477,6 +3491,7 @@
         msr ID_MMFR1_EL1, x12
         msr ID_MMFR2_EL1, x12
         msr ID_MMFR3_EL1, x12
+        msr ID_MMFR4_EL1, x12
         msr ID_ISAR0_EL1, x12
         msr ID_ISAR1_EL1, x12
         msr ID_ISAR2_EL1, x12
@@ -3568,6 +3583,9 @@
 // CHECK-ERROR-NEXT:             ^
 // CHECK-ERROR-NEXT: error: expected writable system register or pstate
 // CHECK-ERROR-NEXT:         msr ID_MMFR3_EL1, x12
+// CHECK-ERROR-NEXT:             ^
+// CHECK-ERROR-NEXT: error: expected writable system register or pstate
+// CHECK-ERROR-NEXT:         msr ID_MMFR4_EL1, x12
 // CHECK-ERROR-NEXT:             ^
 // CHECK-ERROR-NEXT: error: expected writable system register or pstate
 // CHECK-ERROR-NEXT:         msr ID_ISAR0_EL1, x12

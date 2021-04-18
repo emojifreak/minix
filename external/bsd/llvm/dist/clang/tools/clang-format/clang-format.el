@@ -1,4 +1,4 @@
-;;; clang-format.el --- Format code using clang-format
+;;; clang-format.el --- Format code using clang-format  -*- lexical-binding: t; -*-
 
 ;; Keywords: tools, c
 ;; Package-Requires: ((cl-lib "0.3"))
@@ -15,7 +15,7 @@
 ;;   M-x package-install clang-format
 ;;
 ;; when ("melpa" . "http://melpa.org/packages/") is included in
-;; `package-archives'. Alternatively, ensure the directory of this
+;; `package-archives'.  Alternatively, ensure the directory of this
 ;; file is in your `load-path' and add
 ;;
 ;;   (require 'clang-format)
@@ -42,7 +42,7 @@
 
 A string containing the name or the full path of the executable."
   :group 'clang-format
-  :type 'string
+  :type '(file :must-match t)
   :risky t)
 
 (defcustom clang-format-style "file"
@@ -61,6 +61,7 @@ of the buffer."
   (unless (and (listp xml-node) (eq (xml-node-name xml-node) 'replacements))
     (error "Expected <replacements> node"))
   (let ((nodes (xml-node-children xml-node))
+        (incomplete-format (xml-get-attribute xml-node 'incomplete_format))
         replacements
         cursor)
     (dolist (node nodes)
@@ -76,11 +77,11 @@ of the buffer."
                (when (cdr children)
                  (error "More than one child node in <replacement> node"))
 
-               (setq offset (1+ (string-to-number offset)))
+               (setq offset (string-to-number offset))
                (setq length (string-to-number length))
                (push (list offset length text) replacements)))
             ('cursor
-             (setq cursor (1+ (string-to-number text))))))))
+             (setq cursor (string-to-number text)))))))
 
     ;; Sort by decreasing offset, length.
     (setq replacements (sort (delq nil replacements)
@@ -89,13 +90,32 @@ of the buffer."
                                    (and (= (car a) (car b))
                                         (> (cadr a) (cadr b)))))))
 
-    (cons replacements cursor)))
+    (list replacements cursor (string= incomplete-format "true"))))
 
 (defun clang-format--replace (offset length &optional text)
-  (goto-char offset)
-  (delete-char length)
-  (when text
-    (insert text)))
+  "Replace the region defined by OFFSET and LENGTH with TEXT.
+OFFSET and LENGTH are measured in bytes, not characters.  OFFSET
+is a zero-based file offset."
+  (let ((start (clang-format--filepos-to-bufferpos offset 'exact))
+        (end (clang-format--filepos-to-bufferpos (+ offset length) 'exact)))
+    (goto-char start)
+    (delete-region start end)
+    (when text
+      (insert text))))
+
+;; ‘bufferpos-to-filepos’ and ‘filepos-to-bufferpos’ are new in Emacs 25.1.
+;; Provide fallbacks for older versions.
+(defalias 'clang-format--bufferpos-to-filepos
+  (if (fboundp 'bufferpos-to-filepos)
+      'bufferpos-to-filepos
+    (lambda (position &optional _quality _coding-system)
+      (1- (position-bytes position)))))
+
+(defalias 'clang-format--filepos-to-bufferpos
+  (if (fboundp 'filepos-to-bufferpos)
+      'filepos-to-bufferpos
+    (lambda (byte &optional _quality _coding-system)
+      (byte-to-position (1+ byte)))))
 
 ;;;###autoload
 (defun clang-format-region (start end &optional style)
@@ -110,47 +130,44 @@ is no active region.  If no style is given uses `clang-format-style'."
   (unless style
     (setq style clang-format-style))
 
-  (let ((temp-buffer (generate-new-buffer " *clang-format-temp*"))
+  (let ((file-start (clang-format--bufferpos-to-filepos start 'approximate))
+        (file-end (clang-format--bufferpos-to-filepos end 'approximate))
+        (cursor (clang-format--bufferpos-to-filepos (point) 'exact))
+        (temp-buffer (generate-new-buffer " *clang-format-temp*"))
         (temp-file (make-temp-file "clang-format")))
     (unwind-protect
-        (let (status stderr operations)
-          (setq status
-                (call-process-region
-                 (point-min) (point-max) clang-format-executable
-                 nil `(,temp-buffer ,temp-file) nil
+        (let ((status (call-process-region
+                       nil nil clang-format-executable
+                       nil `(,temp-buffer ,temp-file) nil
 
-                 "-output-replacements-xml"
-                 "-assume-filename" (or (buffer-file-name) "")
-                 "-style" style
-                 "-offset" (number-to-string (1- start))
-                 "-length" (number-to-string (- end start))
-                 "-cursor" (number-to-string (1- (point)))))
-          (setq stderr
-                (with-temp-buffer
-                  (insert-file-contents temp-file)
-                  (when (> (point-max) (point-min))
-                    (insert ": "))
-                  (buffer-substring-no-properties
-                   (point-min) (line-end-position))))
-
+                       "-output-replacements-xml"
+                       "-assume-filename" (or (buffer-file-name) "")
+                       "-style" style
+                       "-offset" (number-to-string file-start)
+                       "-length" (number-to-string (- file-end file-start))
+                       "-cursor" (number-to-string cursor)))
+              (stderr (with-temp-buffer
+                        (unless (zerop (cadr (insert-file-contents temp-file)))
+                          (insert ": "))
+                        (buffer-substring-no-properties
+                         (point-min) (line-end-position)))))
           (cond
            ((stringp status)
             (error "(clang-format killed by signal %s%s)" status stderr))
-           ((not (equal 0 status))
-            (error "(clang-format failed with code %d%s)" status stderr))
-           (t (message "(clang-format succeeded%s)" stderr)))
+           ((not (zerop status))
+            (error "(clang-format failed with code %d%s)" status stderr)))
 
-          (with-current-buffer temp-buffer
-            (setq operations (clang-format--extract (car (xml-parse-region)))))
-
-          (let ((replacements (car operations))
-                (cursor (cdr operations)))
+          (cl-destructuring-bind (replacements cursor incomplete-format)
+              (with-current-buffer temp-buffer
+                (clang-format--extract (car (xml-parse-region))))
             (save-excursion
-              (mapc (lambda (rpl)
-                      (apply #'clang-format--replace rpl))
-                    replacements))
+              (dolist (rpl replacements)
+                (apply #'clang-format--replace rpl)))
             (when cursor
-              (goto-char cursor))))
+              (goto-char (clang-format--filepos-to-bufferpos cursor 'exact)))
+            (if incomplete-format
+                (message "(clang-format: incomplete (syntax errors)%s)" stderr)
+              (message "(clang-format: success%s)" stderr))))
       (delete-file temp-file)
       (when (buffer-name temp-buffer) (kill-buffer temp-buffer)))))
 

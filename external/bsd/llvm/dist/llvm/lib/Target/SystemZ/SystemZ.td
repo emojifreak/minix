@@ -14,7 +14,19 @@
 include "llvm/Target/Target.td"
 
 //===----------------------------------------------------------------------===//
-// SystemZ supported processors and features
+// SystemZ subtarget features
+//===----------------------------------------------------------------------===//
+
+include "SystemZFeatures.td"
+
+//===----------------------------------------------------------------------===//
+// SystemZ subtarget scheduling models
+//===----------------------------------------------------------------------===//
+
+include "SystemZSchedule.td"
+
+//===----------------------------------------------------------------------===//
+// SystemZ supported processors
 //===----------------------------------------------------------------------===//
 
 include "SystemZProcessors.td"
@@ -40,6 +52,7 @@ include "SystemZOperands.td"
 include "SystemZPatterns.td"
 include "SystemZInstrFormats.td"
 include "SystemZInstrInfo.td"
+include "SystemZInstrVector.td"
 include "SystemZInstrFP.td"
 
 def SystemZInstrInfo : InstrInfo {}

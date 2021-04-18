@@ -43,7 +43,7 @@ The following additional relocation types are supported:
 corresponds to the COFF relocation types ``IMAGE_REL_I386_DIR32NB`` (32-bit) or
 ``IMAGE_REL_AMD64_ADDR32NB`` (64-bit).
 
-.. code-block:: gas
+.. code-block:: text
 
   .text
   fun:
@@ -67,7 +67,7 @@ the target.  It corresponds to the COFF relocation types
     .long 4
     .long 242
     .long 40
-    .secrel32 _function_name
+    .secrel32 _function_name + 0
     .secidx   _function_name
     ...
 
@@ -164,6 +164,45 @@ and ``.bar`` is associated to ``.foo``.
 
 	.section	.foo,"bw",discard, "sym"
 	.section	.bar,"rd",associative, "sym"
+
+MC supports these flags in the COFF ``.section`` directive:
+
+  - ``b``: BSS section (``IMAGE_SCN_CNT_INITIALIZED_DATA``)
+  - ``d``: Data section (``IMAGE_SCN_CNT_UNINITIALIZED_DATA``)
+  - ``n``: Section is not loaded (``IMAGE_SCN_LNK_REMOVE``)
+  - ``r``: Read-only
+  - ``s``: Shared section
+  - ``w``: Writable
+  - ``x``: Executable section
+  - ``y``: Not readable
+  - ``D``: Discardable (``IMAGE_SCN_MEM_DISCARDABLE``)
+
+These flags are all compatible with gas, with the exception of the ``D`` flag,
+which gnu as does not support. For gas compatibility, sections with a name
+starting with ".debug" are implicitly discardable.
+
+
+ELF-Dependent
+-------------
+
+``.section`` Directive
+^^^^^^^^^^^^^^^^^^^^^^
+
+In order to support creating multiple sections with the same name and comdat,
+it is possible to add an unique number at the end of the ``.seciton`` directive.
+For example, the following code creates two sections named ``.text``.
+
+.. code-block:: gas
+
+	.section	.text,"ax",@progbits,unique,1
+        nop
+
+	.section	.text,"ax",@progbits,unique,2
+        nop
+
+
+The unique number is not present in the resulting object at all. It is just used
+in the assembler to differentiate the sections.
 
 Target Specific Behaviour
 =========================

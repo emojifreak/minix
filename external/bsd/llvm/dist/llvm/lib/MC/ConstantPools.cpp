@@ -25,22 +25,31 @@ void ConstantPool::emitEntries(MCStreamer &Streamer) {
   if (Entries.empty())
     return;
   Streamer.EmitDataRegion(MCDR_DataRegion);
-  for (EntryVecTy::const_iterator I = Entries.begin(), E = Entries.end();
-       I != E; ++I) {
-    Streamer.EmitCodeAlignment(I->Size); // align naturally
-    Streamer.EmitLabel(I->Label);
-    Streamer.EmitValue(I->Value, I->Size);
+  for (const ConstantPoolEntry &Entry : Entries) {
+    Streamer.EmitCodeAlignment(Entry.Size); // align naturally
+    Streamer.EmitLabel(Entry.Label);
+    Streamer.EmitValue(Entry.Value, Entry.Size, Entry.Loc);
   }
   Streamer.EmitDataRegion(MCDR_DataRegionEnd);
   Entries.clear();
 }
 
 const MCExpr *ConstantPool::addEntry(const MCExpr *Value, MCContext &Context,
-                                     unsigned Size) {
-  MCSymbol *CPEntryLabel = Context.CreateTempSymbol();
+                                     unsigned Size, SMLoc Loc) {
+  const MCConstantExpr *C = dyn_cast<MCConstantExpr>(Value);
 
-  Entries.push_back(ConstantPoolEntry(CPEntryLabel, Value, Size));
-  return MCSymbolRefExpr::Create(CPEntryLabel, Context);
+  // Check if there is existing entry for the same constant. If so, reuse it.
+  auto Itr = C ? CachedEntries.find(C->getValue()) : CachedEntries.end();
+  if (Itr != CachedEntries.end())
+    return Itr->second;
+
+  MCSymbol *CPEntryLabel = Context.createTempSymbol();
+
+  Entries.push_back(ConstantPoolEntry(CPEntryLabel, Value, Size, Loc));
+  const auto SymRef = MCSymbolRefExpr::create(CPEntryLabel, Context);
+  if (C)
+    CachedEntries[C->getValue()] = SymRef;
+  return SymRef;
 }
 
 bool ConstantPool::empty() { return Entries.empty(); }
@@ -48,8 +57,7 @@ bool ConstantPool::empty() { return Entries.empty(); }
 //
 // AssemblerConstantPools implementation
 //
-ConstantPool *
-AssemblerConstantPools::getConstantPool(const MCSection *Section) {
+ConstantPool *AssemblerConstantPools::getConstantPool(MCSection *Section) {
   ConstantPoolMapTy::iterator CP = ConstantPools.find(Section);
   if (CP == ConstantPools.end())
     return nullptr;
@@ -58,11 +66,11 @@ AssemblerConstantPools::getConstantPool(const MCSection *Section) {
 }
 
 ConstantPool &
-AssemblerConstantPools::getOrCreateConstantPool(const MCSection *Section) {
+AssemblerConstantPools::getOrCreateConstantPool(MCSection *Section) {
   return ConstantPools[Section];
 }
 
-static void emitConstantPool(MCStreamer &Streamer, const MCSection *Section,
+static void emitConstantPool(MCStreamer &Streamer, MCSection *Section,
                              ConstantPool &CP) {
   if (!CP.empty()) {
     Streamer.SwitchSection(Section);
@@ -72,18 +80,16 @@ static void emitConstantPool(MCStreamer &Streamer, const MCSection *Section,
 
 void AssemblerConstantPools::emitAll(MCStreamer &Streamer) {
   // Dump contents of assembler constant pools.
-  for (ConstantPoolMapTy::iterator CPI = ConstantPools.begin(),
-                                   CPE = ConstantPools.end();
-       CPI != CPE; ++CPI) {
-    const MCSection *Section = CPI->first;
-    ConstantPool &CP = CPI->second;
+  for (auto &CPI : ConstantPools) {
+    MCSection *Section = CPI.first;
+    ConstantPool &CP = CPI.second;
 
     emitConstantPool(Streamer, Section, CP);
   }
 }
 
 void AssemblerConstantPools::emitForCurrentSection(MCStreamer &Streamer) {
-  const MCSection *Section = Streamer.getCurrentSection().first;
+  MCSection *Section = Streamer.getCurrentSectionOnly();
   if (ConstantPool *CP = getConstantPool(Section)) {
     emitConstantPool(Streamer, Section, *CP);
   }
@@ -91,8 +97,8 @@ void AssemblerConstantPools::emitForCurrentSection(MCStreamer &Streamer) {
 
 const MCExpr *AssemblerConstantPools::addEntry(MCStreamer &Streamer,
                                                const MCExpr *Expr,
-                                               unsigned Size) {
-  const MCSection *Section = Streamer.getCurrentSection().first;
+                                               unsigned Size, SMLoc Loc) {
+  MCSection *Section = Streamer.getCurrentSectionOnly();
   return getOrCreateConstantPool(Section).addEntry(Expr, Streamer.getContext(),
-                                                   Size);
+                                                   Size, Loc);
 }

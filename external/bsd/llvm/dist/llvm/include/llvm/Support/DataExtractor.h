@@ -10,7 +10,6 @@
 #ifndef LLVM_SUPPORT_DATAEXTRACTOR_H
 #define LLVM_SUPPORT_DATAEXTRACTOR_H
 
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/DataTypes.h"
 
@@ -30,7 +29,7 @@ public:
 
   /// \brief Get the data pointed to by this extractor.
   StringRef getData() const { return Data; }
-  /// \brief Get the endianess for this extractor.
+  /// \brief Get the endianness for this extractor.
   bool isLittleEndian() const { return IsLittleEndian; }
   /// \brief Get the address size for this extractor.
   uint8_t getAddressSize() const { return AddressSize; }

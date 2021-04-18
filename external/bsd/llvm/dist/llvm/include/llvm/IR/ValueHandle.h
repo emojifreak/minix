@@ -22,17 +22,6 @@ namespace llvm {
 class ValueHandleBase;
 template<typename From> struct simplify_type;
 
-// ValueHandleBase** is only 4-byte aligned.
-template<>
-class PointerLikeTypeTraits<ValueHandleBase**> {
-public:
-  static inline void *getAsVoidPointer(ValueHandleBase** P) { return P; }
-  static inline ValueHandleBase **getFromVoidPointer(void *P) {
-    return static_cast<ValueHandleBase**>(P);
-  }
-  enum { NumLowBitsAvailable = 2 };
-};
-
 /// \brief This is the common base class of value handles.
 ///
 /// ValueHandle's are smart pointers to Value's that have special behavior when
@@ -52,13 +41,21 @@ protected:
     Weak
   };
 
+  ValueHandleBase(const ValueHandleBase &RHS)
+      : ValueHandleBase(RHS.PrevPair.getInt(), RHS) {}
+
+  ValueHandleBase(HandleBaseKind Kind, const ValueHandleBase &RHS)
+      : PrevPair(nullptr, Kind), Next(nullptr), V(RHS.V) {
+    if (isValid(V))
+      AddToExistingUseList(RHS.getPrevPtr());
+  }
+
 private:
   PointerIntPair<ValueHandleBase**, 2, HandleBaseKind> PrevPair;
   ValueHandleBase *Next;
 
   Value* V;
 
-  ValueHandleBase(const ValueHandleBase&) LLVM_DELETED_FUNCTION;
 public:
   explicit ValueHandleBase(HandleBaseKind Kind)
     : PrevPair(nullptr, Kind), Next(nullptr), V(nullptr) {}
@@ -67,11 +64,7 @@ public:
     if (isValid(V))
       AddToUseList();
   }
-  ValueHandleBase(HandleBaseKind Kind, const ValueHandleBase &RHS)
-    : PrevPair(nullptr, Kind), Next(nullptr), V(RHS.V) {
-    if (isValid(V))
-      AddToExistingUseList(RHS.getPrevPtr());
-  }
+
   ~ValueHandleBase() {
     if (isValid(V))
       RemoveFromUseList();
@@ -145,6 +138,8 @@ public:
   WeakVH(const WeakVH &RHS)
     : ValueHandleBase(Weak, RHS) {}
 
+  WeakVH &operator=(const WeakVH &RHS) = default;
+
   Value *operator=(Value *RHS) {
     return ValueHandleBase::operator=(RHS);
   }
@@ -159,11 +154,13 @@ public:
 
 // Specialize simplify_type to allow WeakVH to participate in
 // dyn_cast, isa, etc.
-template<> struct simplify_type<WeakVH> {
-  typedef Value* SimpleType;
-  static SimpleType getSimplifiedValue(WeakVH &WVH) {
-    return WVH;
-  }
+template <> struct simplify_type<WeakVH> {
+  typedef Value *SimpleType;
+  static SimpleType getSimplifiedValue(WeakVH &WVH) { return WVH; }
+};
+template <> struct simplify_type<const WeakVH> {
+  typedef Value *SimpleType;
+  static SimpleType getSimplifiedValue(const WeakVH &WVH) { return WVH; }
 };
 
 /// \brief Value handle that asserts if the Value is deleted.
@@ -312,7 +309,6 @@ class TrackingVH : public ValueHandleBase {
 public:
   TrackingVH() : ValueHandleBase(Tracking) {}
   TrackingVH(ValueTy *P) : ValueHandleBase(Tracking, GetAsValue(P)) {}
-  TrackingVH(const TrackingVH &RHS) : ValueHandleBase(Tracking, RHS) {}
 
   operator ValueTy*() const {
     return getValPtr();
@@ -320,10 +316,6 @@ public:
 
   ValueTy *operator=(ValueTy *RHS) {
     setValPtr(RHS);
-    return getValPtr();
-  }
-  ValueTy *operator=(const TrackingVH<ValueTy> &RHS) {
-    setValPtr(RHS.getValPtr());
     return getValPtr();
   }
 
@@ -337,15 +329,13 @@ public:
 /// when the underlying Value has RAUW called on it or is destroyed.  This
 /// class can be used as the key of a map, as long as the user takes it out of
 /// the map before calling setValPtr() (since the map has to rearrange itself
-/// when the pointer changes).  Unlike ValueHandleBase, this class has a vtable
-/// and a virtual destructor.
+/// when the pointer changes).  Unlike ValueHandleBase, this class has a vtable.
 class CallbackVH : public ValueHandleBase {
   virtual void anchor();
 protected:
-  CallbackVH(const CallbackVH &RHS)
-    : ValueHandleBase(Callback, RHS) {}
-
-  virtual ~CallbackVH() {}
+  ~CallbackVH() = default;
+  CallbackVH(const CallbackVH &) = default;
+  CallbackVH &operator=(const CallbackVH &) = default;
 
   void setValPtr(Value *P) {
     ValueHandleBase::operator=(P);

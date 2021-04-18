@@ -20,19 +20,20 @@
 #include "clang/Frontend/Utils.h"
 #include "clang/Lex/HeaderSearch.h"
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Lex/PreprocessorOptions.h"
 #include "clang/Parse/ParseAST.h"
 #include "clang/Serialization/ASTDeserializationListener.h"
 #include "clang/Serialization/ASTReader.h"
 #include "clang/Serialization/GlobalModuleIndex.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
 #include <system_error>
 using namespace clang;
 
-template class llvm::Registry<clang::PluginASTAction>;
+LLVM_INSTANTIATE_REGISTRY(FrontendPluginRegistry)
 
 namespace {
 
@@ -44,7 +45,7 @@ public:
   explicit DelegatingDeserializationListener(
       ASTDeserializationListener *Previous, bool DeletePrevious)
       : Previous(Previous), DeletePrevious(DeletePrevious) {}
-  virtual ~DelegatingDeserializationListener() {
+  ~DelegatingDeserializationListener() override {
     if (DeletePrevious)
       delete Previous;
   }
@@ -71,7 +72,7 @@ public:
       Previous->SelectorRead(ID, Sel);
   }
   void MacroDefinitionRead(serialization::PreprocessedEntityID PPID,
-                           MacroDefinition *MD) override {
+                           MacroDefinitionRecord *MD) override {
     if (Previous)
       Previous->MacroDefinitionRead(PPID, MD);
   }
@@ -141,28 +142,46 @@ FrontendAction::CreateWrappedASTConsumer(CompilerInstance &CI,
   if (!Consumer)
     return nullptr;
 
-  if (CI.getFrontendOpts().AddPluginActions.size() == 0)
+  // If there are no registered plugins we don't need to wrap the consumer
+  if (FrontendPluginRegistry::begin() == FrontendPluginRegistry::end())
     return Consumer;
 
-  // Make sure the non-plugin consumer is first, so that plugins can't
-  // modifiy the AST.
+  // Collect the list of plugins that go before the main action (in Consumers)
+  // or after it (in AfterConsumers)
   std::vector<std::unique_ptr<ASTConsumer>> Consumers;
-  Consumers.push_back(std::move(Consumer));
-
-  for (size_t i = 0, e = CI.getFrontendOpts().AddPluginActions.size();
-       i != e; ++i) { 
-    // This is O(|plugins| * |add_plugins|), but since both numbers are
-    // way below 50 in practice, that's ok.
-    for (FrontendPluginRegistry::iterator
-        it = FrontendPluginRegistry::begin(),
-        ie = FrontendPluginRegistry::end();
-        it != ie; ++it) {
-      if (it->getName() != CI.getFrontendOpts().AddPluginActions[i])
-        continue;
-      std::unique_ptr<PluginASTAction> P = it->instantiate();
-      if (P->ParseArgs(CI, CI.getFrontendOpts().AddPluginArgs[i]))
-        Consumers.push_back(P->CreateASTConsumer(CI, InFile));
+  std::vector<std::unique_ptr<ASTConsumer>> AfterConsumers;
+  for (FrontendPluginRegistry::iterator it = FrontendPluginRegistry::begin(),
+                                        ie = FrontendPluginRegistry::end();
+       it != ie; ++it) {
+    std::unique_ptr<PluginASTAction> P = it->instantiate();
+    PluginASTAction::ActionType ActionType = P->getActionType();
+    if (ActionType == PluginASTAction::Cmdline) {
+      // This is O(|plugins| * |add_plugins|), but since both numbers are
+      // way below 50 in practice, that's ok.
+      for (size_t i = 0, e = CI.getFrontendOpts().AddPluginActions.size();
+           i != e; ++i) {
+        if (it->getName() == CI.getFrontendOpts().AddPluginActions[i]) {
+          ActionType = PluginASTAction::AddAfterMainAction;
+          break;
+        }
+      }
     }
+    if ((ActionType == PluginASTAction::AddBeforeMainAction ||
+         ActionType == PluginASTAction::AddAfterMainAction) &&
+        P->ParseArgs(CI, CI.getFrontendOpts().PluginArgs[it->getName()])) {
+      std::unique_ptr<ASTConsumer> PluginConsumer = P->CreateASTConsumer(CI, InFile);
+      if (ActionType == PluginASTAction::AddBeforeMainAction) {
+        Consumers.push_back(std::move(PluginConsumer));
+      } else {
+        AfterConsumers.push_back(std::move(PluginConsumer));
+      }
+    }
+  }
+
+  // Add to Consumers the main consumer, then all the plugins that go after it
+  Consumers.push_back(std::move(Consumer));
+  for (auto &C : AfterConsumers) {
+    Consumers.push_back(std::move(C));
   }
 
   return llvm::make_unique<MultiplexConsumer>(std::move(Consumers));
@@ -190,8 +209,9 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
 
     IntrusiveRefCntPtr<DiagnosticsEngine> Diags(&CI.getDiagnostics());
 
-    std::unique_ptr<ASTUnit> AST =
-        ASTUnit::LoadFromASTFile(InputFile, Diags, CI.getFileSystemOpts());
+    std::unique_ptr<ASTUnit> AST = ASTUnit::LoadFromASTFile(
+        InputFile, CI.getPCHContainerReader(), Diags, CI.getFileSystemOpts(),
+        CI.getCodeGenOpts().DebugTypeExtRefs);
 
     if (!AST)
       goto failure;
@@ -204,7 +224,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     // file, otherwise the CompilerInstance will happily destroy them.
     CI.setFileManager(&AST->getFileManager());
     CI.setSourceManager(&AST->getSourceManager());
-    CI.setPreprocessor(&AST->getPreprocessor());
+    CI.setPreprocessor(AST->getPreprocessorPtr());
     CI.setASTContext(&AST->getASTContext());
 
     setCurrentInput(Input, std::move(AST));
@@ -262,19 +282,21 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     FileManager &FileMgr = CI.getFileManager();
     PreprocessorOptions &PPOpts = CI.getPreprocessorOpts();
     StringRef PCHInclude = PPOpts.ImplicitPCHInclude;
+    std::string SpecificModuleCachePath = CI.getSpecificModuleCachePath();
     if (const DirectoryEntry *PCHDir = FileMgr.getDirectory(PCHInclude)) {
       std::error_code EC;
       SmallString<128> DirNative;
       llvm::sys::path::native(PCHDir->getName(), DirNative);
       bool Found = false;
-      for (llvm::sys::fs::directory_iterator Dir(DirNative.str(), EC), DirEnd;
+      vfs::FileSystem &FS = *FileMgr.getVirtualFileSystem();
+      for (vfs::directory_iterator Dir = FS.dir_begin(DirNative, EC), DirEnd;
            Dir != DirEnd && !EC; Dir.increment(EC)) {
         // Check whether this is an acceptable AST file.
-        if (ASTReader::isAcceptableASTFile(Dir->path(), FileMgr,
-                                           CI.getLangOpts(),
-                                           CI.getTargetOpts(),
-                                           CI.getPreprocessorOpts())) {
-          PPOpts.ImplicitPCHInclude = Dir->path();
+        if (ASTReader::isAcceptableASTFile(
+                Dir->getName(), FileMgr, CI.getPCHContainerReader(),
+                CI.getLangOpts(), CI.getTargetOpts(), CI.getPreprocessorOpts(),
+                SpecificModuleCachePath)) {
+          PPOpts.ImplicitPCHInclude = Dir->getName();
           Found = true;
           break;
         }
@@ -282,7 +304,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
 
       if (!Found) {
         CI.getDiagnostics().Report(diag::err_fe_no_pch_in_dir) << PCHInclude;
-        return true;
+        goto failure;
       }
     }
   }
@@ -373,7 +395,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     if (CI.getLangOpts().Modules)
       CI.createModuleManager();
 
-    PP.getBuiltinInfo().InitializeBuiltins(PP.getIdentifierTable(),
+    PP.getBuiltinInfo().initializeBuiltins(PP.getIdentifierTable(),
                                            PP.getLangOpts());
   } else {
     // FIXME: If this is a problem, recover from it by creating a multiplex
@@ -381,6 +403,15 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     assert((!CI.getLangOpts().Modules || CI.getModuleManager()) &&
            "modules enabled but created an external source that "
            "doesn't support modules");
+  }
+
+  // If we were asked to load any module map files, do so now.
+  for (const auto &Filename : CI.getFrontendOpts().ModuleMapFiles) {
+    if (auto *File = CI.getFileManager().getFile(Filename))
+      CI.getPreprocessor().getHeaderSearchInfo().loadModuleMapFile(
+          File, /*IsSystem*/false);
+    else
+      CI.getDiagnostics().Report(diag::err_module_map_not_found) << Filename;
   }
 
   // If we were asked to load any module files, do so now.
@@ -431,9 +462,11 @@ bool FrontendAction::Execute() {
   // there were any module-build failures.
   if (CI.shouldBuildGlobalModuleIndex() && CI.hasFileManager() &&
       CI.hasPreprocessor()) {
-    GlobalModuleIndex::writeIndex(
-      CI.getFileManager(),
-      CI.getPreprocessor().getHeaderSearchInfo().getModuleCachePath());
+    StringRef Cache =
+        CI.getPreprocessor().getHeaderSearchInfo().getModuleCachePath();
+    if (!Cache.empty())
+      GlobalModuleIndex::writeIndex(CI.getFileManager(),
+                                    CI.getPCHContainerReader(), Cache);
   }
 
   return true;
@@ -457,16 +490,12 @@ void FrontendAction::EndSourceFile() {
   // FIXME: There is more per-file stuff we could just drop here?
   bool DisableFree = CI.getFrontendOpts().DisableFree;
   if (DisableFree) {
-    if (!isCurrentFileAST()) {
-      CI.resetAndLeakSema();
-      CI.resetAndLeakASTContext();
-    }
+    CI.resetAndLeakSema();
+    CI.resetAndLeakASTContext();
     BuryPointer(CI.takeASTConsumer().get());
   } else {
-    if (!isCurrentFileAST()) {
-      CI.setSema(nullptr);
-      CI.setASTContext(nullptr);
-    }
+    CI.setSema(nullptr);
+    CI.setASTContext(nullptr);
     CI.setASTConsumer(nullptr);
   }
 
@@ -483,13 +512,16 @@ void FrontendAction::EndSourceFile() {
   // FrontendAction.
   CI.clearOutputFiles(/*EraseFiles=*/shouldEraseOutputFiles());
 
-  // FIXME: Only do this if DisableFree is set.
   if (isCurrentFileAST()) {
-    CI.resetAndLeakSema();
-    CI.resetAndLeakASTContext();
-    CI.resetAndLeakPreprocessor();
-    CI.resetAndLeakSourceManager();
-    CI.resetAndLeakFileManager();
+    if (DisableFree) {
+      CI.resetAndLeakPreprocessor();
+      CI.resetAndLeakSourceManager();
+      CI.resetAndLeakFileManager();
+    } else {
+      CI.setPreprocessor(nullptr);
+      CI.setSourceManager(nullptr);
+      CI.setFileManager(nullptr);
+    }
   }
 
   setCompilerInstance(nullptr);
@@ -547,7 +579,10 @@ bool WrapperFrontendAction::BeginSourceFileAction(CompilerInstance &CI,
                                                   StringRef Filename) {
   WrappedAction->setCurrentInput(getCurrentInput());
   WrappedAction->setCompilerInstance(&CI);
-  return WrappedAction->BeginSourceFileAction(CI, Filename);
+  auto Ret = WrappedAction->BeginSourceFileAction(CI, Filename);
+  // BeginSourceFileAction may change CurrentInput, e.g. during module builds.
+  setCurrentInput(WrappedAction->getCurrentInput());
+  return Ret;
 }
 void WrapperFrontendAction::ExecuteAction() {
   WrappedAction->ExecuteAction();
@@ -575,6 +610,7 @@ bool WrapperFrontendAction::hasCodeCompletionSupport() const {
   return WrappedAction->hasCodeCompletionSupport();
 }
 
-WrapperFrontendAction::WrapperFrontendAction(FrontendAction *WrappedAction)
-  : WrappedAction(WrappedAction) {}
+WrapperFrontendAction::WrapperFrontendAction(
+    std::unique_ptr<FrontendAction> WrappedAction)
+  : WrappedAction(std::move(WrappedAction)) {}
 

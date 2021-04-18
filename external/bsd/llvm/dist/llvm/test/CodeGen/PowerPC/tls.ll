@@ -1,6 +1,6 @@
-; RUN: llc -O0 < %s -march=ppc64 -mcpu=ppc64 | FileCheck -check-prefix=OPT0 %s
-; RUN: llc -O1 < %s -march=ppc64 -mcpu=ppc64 | FileCheck -check-prefix=OPT1 %s
-; RUN: llc -O0 < %s -march=ppc32 -mcpu=ppc | FileCheck -check-prefix=OPT0-PPC32 %s
+; RUN: llc -relocation-model=static -verify-machineinstrs -O0 < %s -march=ppc64 -mcpu=ppc64 | FileCheck -check-prefix=OPT0 %s
+; RUN: llc -relocation-model=static -verify-machineinstrs -O1 < %s -march=ppc64 -mcpu=ppc64 | FileCheck -check-prefix=OPT1 %s
+; RUN: llc -verify-machineinstrs -O0 < %s -march=ppc32 -mcpu=ppc | FileCheck -check-prefix=OPT0-PPC32 %s
 
 target triple = "powerpc64-unknown-linux-gnu"
 
@@ -30,7 +30,7 @@ define signext i32 @main2() nounwind {
 entry:
   %retval = alloca i32, align 4
   store i32 0, i32* %retval
-  %0 = load i32* @a2, align 4
+  %0 = load i32, i32* @a2, align 4
   ret i32 %0
 }
 

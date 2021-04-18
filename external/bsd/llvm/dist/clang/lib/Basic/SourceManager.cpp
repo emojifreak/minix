@@ -25,7 +25,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstring>
-#include <string>
 
 using namespace clang;
 using namespace SrcMgr;
@@ -110,8 +109,8 @@ llvm::MemoryBuffer *ContentCache::getBuffer(DiagnosticsEngine &Diag,
   // possible.
   if (!BufferOrError) {
     StringRef FillStr("<<<MISSING SOURCE FILE>>>\n");
-    Buffer.setPointer(MemoryBuffer::getNewMemBuffer(ContentsEntry->getSize(),
-                                                    "<invalid>").release());
+    Buffer.setPointer(MemoryBuffer::getNewUninitMemBuffer(
+                          ContentsEntry->getSize(), "<invalid>").release());
     char *Ptr = const_cast<char*>(Buffer.getPointer()->getBufferStart());
     for (unsigned i = 0, e = ContentsEntry->getSize(); i != e; ++i)
       Ptr[i] = FillStr[i % FillStr.size()];
@@ -279,9 +278,7 @@ void LineTableInfo::AddEntry(FileID FID,
 /// getLineTableFilenameID - Return the uniqued ID for the specified filename.
 ///
 unsigned SourceManager::getLineTableFilenameID(StringRef Name) {
-  if (!LineTable)
-    LineTable = new LineTableInfo();
-  return LineTable->getLineTableFilenameID(Name);
+  return getLineTable().getLineTableFilenameID(Name);
 }
 
 
@@ -302,9 +299,7 @@ void SourceManager::AddLineNote(SourceLocation Loc, unsigned LineNo,
   // Remember that this file has #line directives now if it doesn't already.
   const_cast<SrcMgr::FileInfo&>(FileInfo).setHasLineDirectives();
 
-  if (!LineTable)
-    LineTable = new LineTableInfo();
-  LineTable->AddLineNote(LocInfo.first, LocInfo.second, LineNo, FilenameID);
+  getLineTable().AddLineNote(LocInfo.first, LocInfo.second, LineNo, FilenameID);
 }
 
 /// AddLineNote - Add a GNU line marker to the line table.
@@ -332,8 +327,7 @@ void SourceManager::AddLineNote(SourceLocation Loc, unsigned LineNo,
   // Remember that this file has #line directives now if it doesn't already.
   const_cast<SrcMgr::FileInfo&>(FileInfo).setHasLineDirectives();
 
-  if (!LineTable)
-    LineTable = new LineTableInfo();
+  (void) getLineTable();
 
   SrcMgr::CharacteristicKind FileKind;
   if (IsExternCHeader)
@@ -366,7 +360,7 @@ LineTableInfo &SourceManager::getLineTable() {
 SourceManager::SourceManager(DiagnosticsEngine &Diag, FileManager &FileMgr,
                              bool UserFilesAreVolatile)
   : Diag(Diag), FileMgr(FileMgr), OverridenFilesKeepOriginalName(true),
-    UserFilesAreVolatile(UserFilesAreVolatile),
+    UserFilesAreVolatile(UserFilesAreVolatile), FilesAreTransient(false),
     ExternalSLocEntries(nullptr), LineTable(nullptr), NumLinearScans(0),
     NumBinaryProbes(0) {
   clearIDTables();
@@ -392,8 +386,6 @@ SourceManager::~SourceManager() {
       ContentCacheAlloc.Deallocate(I->second);
     }
   }
-
-  llvm::DeleteContainerSeconds(MacroArgsCacheMap);
 }
 
 void SourceManager::clearIDTables() {
@@ -444,6 +436,7 @@ SourceManager::getOrCreateContentCache(const FileEntry *FileEnt,
   }
 
   Entry->IsSystemFile = isSystemFile;
+  Entry->IsTransient = FilesAreTransient;
 
   return Entry;
 }
@@ -484,10 +477,12 @@ std::pair<int, unsigned>
 SourceManager::AllocateLoadedSLocEntries(unsigned NumSLocEntries,
                                          unsigned TotalSize) {
   assert(ExternalSLocEntries && "Don't have an external sloc source");
+  // Make sure we're not about to run out of source locations.
+  if (CurrentLoadedOffset - TotalSize < NextLocalOffset)
+    return std::make_pair(0, 0);
   LoadedSLocEntryTable.resize(LoadedSLocEntryTable.size() + NumSLocEntries);
   SLocEntryLoaded.resize(LoadedSLocEntryTable.size());
   CurrentLoadedOffset -= TotalSize;
-  assert(CurrentLoadedOffset >= NextLocalOffset && "Out of source locations");
   int ID = LoadedSLocEntryTable.size();
   return std::make_pair(-ID - 1, CurrentLoadedOffset);
 }
@@ -674,6 +669,11 @@ void SourceManager::disableFileContentsOverride(const FileEntry *File) {
   assert(OverriddenFilesInfo);
   OverriddenFilesInfo->OverriddenFiles.erase(File);
   OverriddenFilesInfo->OverriddenFilesWithBuffer.erase(File);
+}
+
+void SourceManager::setFileIsTransient(const FileEntry *File) {
+  const SrcMgr::ContentCache *CC = getOrCreateContentCache(File);
+  const_cast<SrcMgr::ContentCache *>(CC)->IsTransient = true;
 }
 
 StringRef SourceManager::getBufferData(FileID FID, bool *Invalid) const {
@@ -995,12 +995,17 @@ SourceManager::getExpansionRange(SourceLocation Loc) const {
   return Res;
 }
 
-bool SourceManager::isMacroArgExpansion(SourceLocation Loc) const {
+bool SourceManager::isMacroArgExpansion(SourceLocation Loc,
+                                        SourceLocation *StartLoc) const {
   if (!Loc.isMacroID()) return false;
 
   FileID FID = getFileID(Loc);
   const SrcMgr::ExpansionInfo &Expansion = getSLocEntry(FID).getExpansion();
-  return Expansion.isMacroArgExpansion();
+  if (!Expansion.isMacroArgExpansion()) return false;
+
+  if (StartLoc)
+    *StartLoc = Expansion.getExpansionLocStart();
+  return true;
 }
 
 bool SourceManager::isMacroBodyExpansion(SourceLocation Loc) const {
@@ -1152,7 +1157,8 @@ unsigned SourceManager::getColumnNumber(FileID FID, unsigned FilePos,
 
 // isInvalid - Return the result of calling loc.isInvalid(), and
 // if Invalid is not null, set its value to same.
-static bool isInvalid(SourceLocation Loc, bool *Invalid) {
+template<typename LocType>
+static bool isInvalid(LocType Loc, bool *Invalid) {
   bool MyInvalid = Loc.isInvalid();
   if (Invalid)
     *Invalid = MyInvalid;
@@ -1175,8 +1181,9 @@ unsigned SourceManager::getExpansionColumnNumber(SourceLocation Loc,
 
 unsigned SourceManager::getPresumedColumnNumber(SourceLocation Loc,
                                                 bool *Invalid) const {
-  if (isInvalid(Loc, Invalid)) return 0;
-  return getPresumedLoc(Loc).getColumn();
+  PresumedLoc PLoc = getPresumedLoc(Loc);
+  if (isInvalid(PLoc, Invalid)) return 0;
+  return PLoc.getColumn();
 }
 
 #ifdef __SSE2__
@@ -1250,15 +1257,19 @@ FoundSpecialChar:
 
     if (Buf[0] == '\n' || Buf[0] == '\r') {
       // If this is \n\r or \r\n, skip both characters.
-      if ((Buf[1] == '\n' || Buf[1] == '\r') && Buf[0] != Buf[1])
-        ++Offs, ++Buf;
-      ++Offs, ++Buf;
+      if ((Buf[1] == '\n' || Buf[1] == '\r') && Buf[0] != Buf[1]) {
+        ++Offs;
+        ++Buf;
+      }
+      ++Offs;
+      ++Buf;
       LineOffsets.push_back(Offs);
     } else {
       // Otherwise, this is a null.  If end of file, exit.
       if (Buf == End) break;
       // Otherwise, skip the null.
-      ++Offs, ++Buf;
+      ++Offs;
+      ++Buf;
     }
   }
 
@@ -1380,8 +1391,9 @@ unsigned SourceManager::getExpansionLineNumber(SourceLocation Loc,
 }
 unsigned SourceManager::getPresumedLineNumber(SourceLocation Loc,
                                               bool *Invalid) const {
-  if (isInvalid(Loc, Invalid)) return 0;
-  return getPresumedLoc(Loc).getLine();
+  PresumedLoc PLoc = getPresumedLoc(Loc);
+  if (isInvalid(PLoc, Invalid)) return 0;
+  return PLoc.getLine();
 }
 
 /// getFileCharacteristic - return the file characteristic of the specified
@@ -1394,7 +1406,7 @@ unsigned SourceManager::getPresumedLineNumber(SourceLocation Loc,
 /// considered to be from a system header.
 SrcMgr::CharacteristicKind
 SourceManager::getFileCharacteristic(SourceLocation Loc) const {
-  assert(!Loc.isInvalid() && "Can't get file characteristic of invalid loc!");
+  assert(Loc.isValid() && "Can't get file characteristic of invalid loc!");
   std::pair<FileID, unsigned> LocInfo = getDecomposedExpansionLoc(Loc);
   bool Invalid = false;
   const SLocEntry &SEntry = getSLocEntry(LocInfo.first, &Invalid);
@@ -1423,8 +1435,8 @@ SourceManager::getFileCharacteristic(SourceLocation Loc) const {
 /// Return the filename or buffer identifier of the buffer the location is in.
 /// Note that this name does not respect \#line directives.  Use getPresumedLoc
 /// for normal clients.
-const char *SourceManager::getBufferName(SourceLocation Loc, 
-                                         bool *Invalid) const {
+StringRef SourceManager::getBufferName(SourceLocation Loc,
+                                       bool *Invalid) const {
   if (isInvalid(Loc, Invalid)) return "<invalid loc>";
 
   return getBuffer(getFileID(Loc), Invalid)->getBufferIdentifier();
@@ -1456,7 +1468,7 @@ PresumedLoc SourceManager::getPresumedLoc(SourceLocation Loc,
   // To get the source name, first consult the FileEntry (if one exists)
   // before the MemBuffer as this will avoid unnecessarily paging in the
   // MemBuffer.
-  const char *Filename;
+  StringRef Filename;
   if (C->OrigEntry)
     Filename = C->OrigEntry->getName();
   else
@@ -1499,7 +1511,7 @@ PresumedLoc SourceManager::getPresumedLoc(SourceLocation Loc,
     }
   }
 
-  return PresumedLoc(Filename, LineNo, ColNo, IncludeLoc);
+  return PresumedLoc(Filename.data(), LineNo, ColNo, IncludeLoc);
 }
 
 /// \brief Returns whether the PresumedLoc for a given SourceLocation is
@@ -1599,7 +1611,7 @@ FileID SourceManager::translateFile(const FileEntry *SourceFile) const {
   // location in the main file.
   Optional<llvm::sys::fs::UniqueID> SourceFileUID;
   Optional<StringRef> SourceFileName;
-  if (!MainFileID.isInvalid()) {
+  if (MainFileID.isValid()) {
     bool Invalid = false;
     const SLocEntry &MainSLoc = getSLocEntry(MainFileID, &Invalid);
     if (Invalid)
@@ -1709,7 +1721,7 @@ SourceLocation SourceManager::translateLineCol(FileID FID,
                                                unsigned Col) const {
   // Lines are used as a one-based index into a zero-based array. This assert
   // checks for possible buffer underruns.
-  assert(Line != 0 && "Passed a zero-based line");
+  assert(Line && Col && "Line and column should start from 1!");
 
   if (FID.isInvalid())
     return SourceLocation();
@@ -1770,13 +1782,10 @@ SourceLocation SourceManager::translateLineCol(FileID FID,
 ///     0   -> SourceLocation()
 ///     100 -> Expanded macro arg location
 ///     110 -> SourceLocation()
-void SourceManager::computeMacroArgsCache(MacroArgsMap *&CachePtr,
+void SourceManager::computeMacroArgsCache(MacroArgsMap &MacroArgsCache,
                                           FileID FID) const {
-  assert(!FID.isInvalid());
-  assert(!CachePtr);
+  assert(FID.isValid());
 
-  CachePtr = new MacroArgsMap();
-  MacroArgsMap &MacroArgsCache = *CachePtr;
   // Initially no macro argument chunk is present.
   MacroArgsCache.insert(std::make_pair(0, SourceLocation()));
 
@@ -1926,9 +1935,11 @@ SourceManager::getMacroArgExpandedLocation(SourceLocation Loc) const {
   if (FID.isInvalid())
     return Loc;
 
-  MacroArgsMap *&MacroArgsCache = MacroArgsCacheMap[FID];
-  if (!MacroArgsCache)
-    computeMacroArgsCache(MacroArgsCache, FID);
+  std::unique_ptr<MacroArgsMap> &MacroArgsCache = MacroArgsCacheMap[FID];
+  if (!MacroArgsCache) {
+    MacroArgsCache = llvm::make_unique<MacroArgsMap>();
+    computeMacroArgsCache(*MacroArgsCache, FID);
+  }
 
   assert(!MacroArgsCache->empty());
   MacroArgsMap::iterator I = MacroArgsCache->upper_bound(Offset);
@@ -2081,10 +2092,10 @@ bool SourceManager::isBeforeInTranslationUnit(SourceLocation LHS,
 
   // Clear the lookup cache, it depends on a common location.
   IsBeforeInTUCache.clear();
-  llvm::MemoryBuffer *LBuf = getBuffer(LOffs.first);
-  llvm::MemoryBuffer *RBuf = getBuffer(ROffs.first);
-  bool LIsBuiltins = strcmp("<built-in>", LBuf->getBufferIdentifier()) == 0;
-  bool RIsBuiltins = strcmp("<built-in>", RBuf->getBufferIdentifier()) == 0;
+  StringRef LB = getBuffer(LOffs.first)->getBufferIdentifier();
+  StringRef RB = getBuffer(ROffs.first)->getBufferIdentifier();
+  bool LIsBuiltins = LB == "<built-in>";
+  bool RIsBuiltins = RB == "<built-in>";
   // Sort built-in before non-built-in.
   if (LIsBuiltins || RIsBuiltins) {
     if (LIsBuiltins != RIsBuiltins)
@@ -2093,14 +2104,22 @@ bool SourceManager::isBeforeInTranslationUnit(SourceLocation LHS,
     // lower IDs come first.
     return LOffs.first < ROffs.first;
   }
-  bool LIsAsm = strcmp("<inline asm>", LBuf->getBufferIdentifier()) == 0;
-  bool RIsAsm = strcmp("<inline asm>", RBuf->getBufferIdentifier()) == 0;
+  bool LIsAsm = LB == "<inline asm>";
+  bool RIsAsm = RB == "<inline asm>";
   // Sort assembler after built-ins, but before the rest.
   if (LIsAsm || RIsAsm) {
     if (LIsAsm != RIsAsm)
       return RIsAsm;
     assert(LOffs.first == ROffs.first);
     return false;
+  }
+  bool LIsScratch = LB == "<scratch space>";
+  bool RIsScratch = RB == "<scratch space>";
+  // Sort scratch after inline asm, but before the rest.
+  if (LIsScratch || RIsScratch) {
+    if (LIsScratch != RIsScratch)
+      return LIsScratch;
+    return LOffs.second < ROffs.second;
   }
   llvm_unreachable("Unsortable locations found");
 }
@@ -2131,6 +2150,63 @@ void SourceManager::PrintStats() const {
                << NumMacroArgsComputed << " files with macro args computed.\n";
   llvm::errs() << "FileID scans: " << NumLinearScans << " linear, "
                << NumBinaryProbes << " binary.\n";
+}
+
+LLVM_DUMP_METHOD void SourceManager::dump() const {
+  llvm::raw_ostream &out = llvm::errs();
+
+  auto DumpSLocEntry = [&](int ID, const SrcMgr::SLocEntry &Entry,
+                           llvm::Optional<unsigned> NextStart) {
+    out << "SLocEntry <FileID " << ID << "> " << (Entry.isFile() ? "file" : "expansion")
+        << " <SourceLocation " << Entry.getOffset() << ":";
+    if (NextStart)
+      out << *NextStart << ">\n";
+    else
+      out << "???\?>\n";
+    if (Entry.isFile()) {
+      auto &FI = Entry.getFile();
+      if (FI.NumCreatedFIDs)
+        out << "  covers <FileID " << ID << ":" << int(ID + FI.NumCreatedFIDs)
+            << ">\n";
+      if (FI.getIncludeLoc().isValid())
+        out << "  included from " << FI.getIncludeLoc().getOffset() << "\n";
+      if (auto *CC = FI.getContentCache()) {
+        out << "  for " << (CC->OrigEntry ? CC->OrigEntry->getName() : "<none>")
+            << "\n";
+        if (CC->BufferOverridden)
+          out << "  contents overridden\n";
+        if (CC->ContentsEntry != CC->OrigEntry) {
+          out << "  contents from "
+              << (CC->ContentsEntry ? CC->ContentsEntry->getName() : "<none>")
+              << "\n";
+        }
+      }
+    } else {
+      auto &EI = Entry.getExpansion();
+      out << "  spelling from " << EI.getSpellingLoc().getOffset() << "\n";
+      out << "  macro " << (EI.isMacroArgExpansion() ? "arg" : "body")
+          << " range <" << EI.getExpansionLocStart().getOffset() << ":"
+          << EI.getExpansionLocEnd().getOffset() << ">\n";
+    }
+  };
+
+  // Dump local SLocEntries.
+  for (unsigned ID = 0, NumIDs = LocalSLocEntryTable.size(); ID != NumIDs; ++ID) {
+    DumpSLocEntry(ID, LocalSLocEntryTable[ID],
+                  ID == NumIDs - 1 ? NextLocalOffset
+                                   : LocalSLocEntryTable[ID + 1].getOffset());
+  }
+  // Dump loaded SLocEntries.
+  llvm::Optional<unsigned> NextStart;
+  for (unsigned Index = 0; Index != LoadedSLocEntryTable.size(); ++Index) {
+    int ID = -(int)Index - 2;
+    if (SLocEntryLoaded[Index]) {
+      DumpSLocEntry(ID, LoadedSLocEntryTable[Index], NextStart);
+      NextStart = LoadedSLocEntryTable[Index].getOffset();
+    } else {
+      NextStart = None;
+    }
+  }
 }
 
 ExternalSLocEntrySource::~ExternalSLocEntrySource() { }

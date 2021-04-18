@@ -15,7 +15,7 @@
 
 namespace clang {
 class Decl;
-class MacroDefinition;
+class MacroDefinitionRecord;
 class SourceManager;
 
 namespace index {
@@ -44,7 +44,7 @@ void generateUSRForObjCMethod(StringRef Sel, bool IsInstanceMethod,
                               raw_ostream &OS);
 
 /// \brief Generate a USR fragment for an Objective-C property.
-void generateUSRForObjCProperty(StringRef Prop, raw_ostream &OS);
+void generateUSRForObjCProperty(StringRef Prop, bool isClassProp, raw_ostream &OS);
 
 /// \brief Generate a USR fragment for an Objective-C protocol.
 void generateUSRForObjCProtocol(StringRef Prot, raw_ostream &OS);
@@ -52,8 +52,8 @@ void generateUSRForObjCProtocol(StringRef Prot, raw_ostream &OS);
 /// \brief Generate a USR for a macro, including the USR prefix.
 ///
 /// \returns true on error, false on success.
-bool generateUSRForMacro(const MacroDefinition *MD, const SourceManager &SM,
-                         SmallVectorImpl<char> &Buf);
+bool generateUSRForMacro(const MacroDefinitionRecord *MD,
+                         const SourceManager &SM, SmallVectorImpl<char> &Buf);
 
 } // namespace index
 } // namespace clang

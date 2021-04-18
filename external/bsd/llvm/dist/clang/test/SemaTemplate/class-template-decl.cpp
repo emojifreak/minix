@@ -10,11 +10,11 @@ namespace N {
   template<typename T> class C;
 }
 
-extern "C" {
+extern "C" { // expected-note {{extern "C" language linkage specification begins here}}
   template<typename T> class D; // expected-error{{templates must have C++ linkage}}
 }
 
-extern "C" {
+extern "C" { // expected-note 2 {{extern "C" language linkage specification begins here}}
   class PR17968 {
     template<typename T> class D; // expected-error{{templates must have C++ linkage}}
     template<typename T> void f(); // expected-error{{templates must have C++ linkage}}
@@ -145,4 +145,17 @@ namespace redecl {
       template<typename T> friend struct K; // ok, redecl::K
     };
   };
+}
+
+extern "C" template <typename T> // expected-error{{templates must have C++ linkage}}
+void DontCrashOnThis() { // expected-note@-1 {{extern "C" language linkage specification begins here}}
+  T &pT = T();
+  pT;
+}
+
+namespace abstract_dependent_class {
+  template<typename T> struct A {
+    virtual A<T> *clone() = 0; // expected-note {{pure virtual}}
+  };
+  template<typename T> A<T> *A<T>::clone() { return new A<T>; } // expected-error {{abstract class type 'A<T>'}}
 }

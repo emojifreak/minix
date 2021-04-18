@@ -132,13 +132,24 @@ namespace EEVT {
     /// this an other based on this information.
     bool EnforceSmallerThan(EEVT::TypeSet &Other, TreePattern &TP);
 
-    /// EnforceVectorEltTypeIs - 'this' is now constrainted to be a vector type
+    /// EnforceVectorEltTypeIs - 'this' is now constrained to be a vector type
     /// whose element is VT.
     bool EnforceVectorEltTypeIs(EEVT::TypeSet &VT, TreePattern &TP);
 
-    /// EnforceVectorSubVectorTypeIs - 'this' is now constrainted to
+    /// EnforceVectorEltTypeIs - 'this' is now constrained to be a vector type
+    /// whose element is VT.
+    bool EnforceVectorEltTypeIs(MVT::SimpleValueType VT, TreePattern &TP);
+
+    /// EnforceVectorSubVectorTypeIs - 'this' is now constrained to
     /// be a vector type VT.
     bool EnforceVectorSubVectorTypeIs(EEVT::TypeSet &VT, TreePattern &TP);
+
+    /// EnforceVectorSameNumElts - 'this' is now constrained to
+    /// be a vector with same num elements as VT.
+    bool EnforceVectorSameNumElts(EEVT::TypeSet &VT, TreePattern &TP);
+
+    /// EnforceSameSize - 'this' is now constrained to be the same size as VT.
+    bool EnforceSameSize(EEVT::TypeSet &VT, TreePattern &TP);
 
     bool operator!=(const TypeSet &RHS) const { return TypeVec != RHS.TypeVec; }
     bool operator==(const TypeSet &RHS) const { return TypeVec == RHS.TypeVec; }
@@ -165,7 +176,7 @@ struct SDTypeConstraint {
   enum {
     SDTCisVT, SDTCisPtrTy, SDTCisInt, SDTCisFP, SDTCisVec, SDTCisSameAs,
     SDTCisVTSmallerThanOp, SDTCisOpSmallerThanOp, SDTCisEltOfVec,
-    SDTCisSubVecOfVec
+    SDTCisSubVecOfVec, SDTCVecEltisVT, SDTCisSameNumEltsAs, SDTCisSameSizeAs
   } ConstraintType;
 
   union {   // The discriminated union.
@@ -187,6 +198,15 @@ struct SDTypeConstraint {
     struct {
       unsigned OtherOperandNum;
     } SDTCisSubVecOfVec_Info;
+    struct {
+      MVT::SimpleValueType VT;
+    } SDTCVecEltisVT_Info;
+    struct {
+      unsigned OtherOperandNum;
+    } SDTCisSameNumEltsAs_Info;
+    struct {
+      unsigned OtherOperandNum;
+    } SDTCisSameSizeAs_Info;
   } x;
 
   /// ApplyTypeConstraint - Given a node in a pattern, apply this type
@@ -392,8 +412,7 @@ public:
   }
   void addPredicateFn(const TreePredicateFn &Fn) {
     assert(!Fn.isAlwaysTrue() && "Empty predicate string!");
-    if (std::find(PredicateFns.begin(), PredicateFns.end(), Fn) ==
-          PredicateFns.end())
+    if (!is_contained(PredicateFns, Fn))
       PredicateFns.push_back(Fn);
   }
 
@@ -696,8 +715,8 @@ public:
 class CodeGenDAGPatterns {
   RecordKeeper &Records;
   CodeGenTarget Target;
-  std::vector<CodeGenIntrinsic> Intrinsics;
-  std::vector<CodeGenIntrinsic> TgtIntrinsics;
+  CodeGenIntrinsicTable Intrinsics;
+  CodeGenIntrinsicTable TgtIntrinsics;
 
   std::map<Record*, SDNodeInfo, LessRecordByID> SDNodes;
   std::map<Record*, std::pair<Record*, std::string>, LessRecordByID> SDNodeXForms;
@@ -790,11 +809,13 @@ public:
                    LessRecordByID>::const_iterator pf_iterator;
   pf_iterator pf_begin() const { return PatternFragments.begin(); }
   pf_iterator pf_end() const { return PatternFragments.end(); }
+  iterator_range<pf_iterator> ptfs() const { return PatternFragments; }
 
   // Patterns to match information.
   typedef std::vector<PatternToMatch>::const_iterator ptm_iterator;
   ptm_iterator ptm_begin() const { return PatternsToMatch.begin(); }
   ptm_iterator ptm_end() const { return PatternsToMatch.end(); }
+  iterator_range<ptm_iterator> ptms() const { return PatternsToMatch; }
 
   /// Parse the Pattern for an instruction, and insert the result in DAGInsts.
   typedef std::map<Record*, DAGInstruction, LessRecordByID> DAGInstMap;

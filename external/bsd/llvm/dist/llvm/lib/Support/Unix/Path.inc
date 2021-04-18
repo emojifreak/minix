@@ -25,6 +25,9 @@
 #if HAVE_FCNTL_H
 #include <fcntl.h>
 #endif
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
 #ifdef HAVE_SYS_MMAN_H
 #include <sys/mman.h>
 #endif
@@ -47,9 +50,10 @@
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#include <sys/attr.h>
 #endif
 
-// Both stdio.h and cstdio are included via different pathes and
+// Both stdio.h and cstdio are included via different paths and
 // stdcxx's cstdio doesn't include stdio.h, so it doesn't #undef the macros
 // either.
 #undef ferror
@@ -60,6 +64,25 @@
 # define PATH_MAX 4096
 #endif
 
+#include <sys/types.h>
+#if !defined(__APPLE__) && !defined(__OpenBSD__) && !defined(__ANDROID__)
+#include <sys/statvfs.h>
+#define STATVFS statvfs
+#define STATVFS_F_FRSIZE(vfs) vfs.f_frsize
+#else
+#ifdef __OpenBSD__
+#include <sys/param.h>
+#include <sys/mount.h>
+#elif defined(__ANDROID__)
+#include <sys/vfs.h>
+#else
+#include <sys/mount.h>
+#endif
+#define STATVFS statfs
+#define STATVFS_F_FRSIZE(vfs) static_cast<uint64_t>(vfs.f_bsize)
+#endif
+
+
 using namespace llvm;
 
 namespace llvm {
@@ -67,20 +90,21 @@ namespace sys  {
 namespace fs {
 #if defined(__FreeBSD__) || defined (__NetBSD__) || defined(__Bitrig__) || \
     defined(__OpenBSD__) || defined(__minix) || defined(__FreeBSD_kernel__) || \
-    defined(__linux__) || defined(__CYGWIN__) || defined(__DragonFly__)
+    defined(__linux__) || defined(__CYGWIN__) || defined(__DragonFly__) || \
+    defined(_AIX)
 static int
 test_dir(char ret[PATH_MAX], const char *dir, const char *bin)
-{  
+{
   struct stat sb;
   char fullpath[PATH_MAX];
 
   snprintf(fullpath, PATH_MAX, "%s/%s", dir, bin);
-  if (realpath(fullpath, ret) == NULL)
-    return (1);
+  if (!realpath(fullpath, ret))
+    return 1;
   if (stat(fullpath, &sb) != 0)
-    return (1);
+    return 1;
 
-  return (0);
+  return 0;
 }
 
 static char *
@@ -91,34 +115,34 @@ getprogpath(char ret[PATH_MAX], const char *bin)
   /* First approach: absolute path. */
   if (bin[0] == '/') {
     if (test_dir(ret, "/", bin) == 0)
-      return (ret);
-    return (NULL);
+      return ret;
+    return nullptr;
   }
 
   /* Second approach: relative path. */
-  if (strchr(bin, '/') != NULL) {
+  if (strchr(bin, '/')) {
     char cwd[PATH_MAX];
-    if (getcwd(cwd, PATH_MAX) == NULL)
-      return (NULL);
+    if (!getcwd(cwd, PATH_MAX))
+      return nullptr;
     if (test_dir(ret, cwd, bin) == 0)
-      return (ret);
-    return (NULL);
+      return ret;
+    return nullptr;
   }
 
   /* Third approach: $PATH */
-  if ((pv = getenv("PATH")) == NULL)
-    return (NULL);
+  if ((pv = getenv("PATH")) == nullptr)
+    return nullptr;
   s = pv = strdup(pv);
-  if (pv == NULL)
-    return (NULL);
-  while ((t = strsep(&s, ":")) != NULL) {
+  if (!pv)
+    return nullptr;
+  while ((t = strsep(&s, ":")) != nullptr) {
     if (test_dir(ret, t, bin) == 0) {
       free(pv);
-      return (ret);
+      return ret;
     }
   }
   free(pv);
-  return (NULL);
+  return nullptr;
 }
 #endif // __FreeBSD__ || __NetBSD__ || __FreeBSD_kernel__
 
@@ -138,7 +162,7 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
   }
 #elif defined(__FreeBSD__) || defined (__NetBSD__) || defined(__Bitrig__) || \
       defined(__OpenBSD__) || defined(__minix) || defined(__DragonFly__) || \
-      defined(__FreeBSD_kernel__)
+      defined(__FreeBSD_kernel__) || defined(_AIX)
   char exe_path[PATH_MAX];
 
   if (getprogpath(exe_path, argv0) != NULL)
@@ -153,8 +177,8 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
           return std::string(exe_path, len);
   } else {
       // Fall back to the classical detection.
-      if (getprogpath(exe_path, argv0) != NULL)
-          return exe_path;
+      if (getprogpath(exe_path, argv0))
+        return exe_path;
   }
 #elif defined(HAVE_DLFCN_H)
   // Use dladdr to get executable path if available.
@@ -174,14 +198,28 @@ std::string getMainExecutable(const char *argv0, void *MainAddr) {
   return "";
 }
 
-TimeValue file_status::getLastModificationTime() const {
-  TimeValue Ret;
-  Ret.fromEpochTime(fs_st_mtime);
-  return Ret;
+TimePoint<> file_status::getLastAccessedTime() const {
+  return toTimePoint(fs_st_atime);
+}
+
+TimePoint<> file_status::getLastModificationTime() const {
+  return toTimePoint(fs_st_mtime);
 }
 
 UniqueID file_status::getUniqueID() const {
   return UniqueID(fs_st_dev, fs_st_ino);
+}
+
+ErrorOr<space_info> disk_space(const Twine &Path) {
+  struct STATVFS Vfs;
+  if (::STATVFS(Path.str().c_str(), &Vfs))
+    return std::error_code(errno, std::generic_category());
+  auto FrSize = STATVFS_F_FRSIZE(Vfs);
+  space_info SpaceInfo;
+  SpaceInfo.capacity = static_cast<uint64_t>(Vfs.f_blocks) * FrSize;
+  SpaceInfo.free = static_cast<uint64_t>(Vfs.f_bfree) * FrSize;
+  SpaceInfo.available = static_cast<uint64_t>(Vfs.f_bavail) * FrSize;
+  return SpaceInfo;
 }
 
 std::error_code current_path(SmallVectorImpl<char> &result) {
@@ -219,11 +257,12 @@ std::error_code current_path(SmallVectorImpl<char> &result) {
   return std::error_code();
 }
 
-std::error_code create_directory(const Twine &path, bool IgnoreExisting) {
+std::error_code create_directory(const Twine &path, bool IgnoreExisting,
+                                 perms Perms) {
   SmallString<128> path_storage;
   StringRef p = path.toNullTerminatedStringRef(path_storage);
 
-  if (::mkdir(p.begin(), S_IRWXU | S_IRWXG) == -1) {
+  if (::mkdir(p.begin(), Perms) == -1) {
     if (errno != EEXIST || !IgnoreExisting)
       return std::error_code(errno, std::generic_category());
   }
@@ -241,6 +280,19 @@ std::error_code create_link(const Twine &to, const Twine &from) {
   StringRef t = to.toNullTerminatedStringRef(to_storage);
 
   if (::symlink(t.begin(), f.begin()) == -1)
+    return std::error_code(errno, std::generic_category());
+
+  return std::error_code();
+}
+
+std::error_code create_hard_link(const Twine &to, const Twine &from) {
+  // Get arguments.
+  SmallString<128> from_storage;
+  SmallString<128> to_storage;
+  StringRef f = from.toNullTerminatedStringRef(from_storage);
+  StringRef t = to.toNullTerminatedStringRef(to_storage);
+
+  if (::link(t.begin(), f.begin()) == -1)
     return std::error_code(errno, std::generic_category());
 
   return std::error_code();
@@ -287,8 +339,17 @@ std::error_code rename(const Twine &from, const Twine &to) {
 }
 
 std::error_code resize_file(int FD, uint64_t Size) {
+#if defined(HAVE_POSIX_FALLOCATE)
+  // If we have posix_fallocate use it. Unlike ftruncate it always allocates
+  // space, so we get an error if the disk is full.
+  if (int Err = ::posix_fallocate(FD, 0, Size))
+    return std::error_code(Err, std::generic_category());
+#else
+  // Use ftruncate as a fallback. It may or may not allocate space. At least on
+  // OS X with HFS+ it does.
   if (::ftruncate(FD, Size) == -1)
     return std::error_code(errno, std::generic_category());
+#endif
 
   return std::error_code();
 }
@@ -322,6 +383,10 @@ std::error_code access(const Twine &Path, AccessMode Mode) {
   }
 
   return std::error_code();
+}
+
+bool can_execute(const Twine &Path) {
+  return !access(Path, AccessMode::Execute);
 }
 
 bool equivalent(file_status A, file_status B) {
@@ -368,8 +433,9 @@ static std::error_code fillStatus(int StatRet, const struct stat &Status,
 
   perms Perms = static_cast<perms>(Status.st_mode);
   Result =
-      file_status(Type, Perms, Status.st_dev, Status.st_ino, Status.st_mtime,
-                  Status.st_uid, Status.st_gid, Status.st_size);
+      file_status(Type, Perms, Status.st_dev, Status.st_ino, Status.st_atime,
+                  Status.st_mtime, Status.st_uid, Status.st_gid,
+                  Status.st_size);
 
   return std::error_code();
 }
@@ -389,20 +455,17 @@ std::error_code status(int FD, file_status &Result) {
   return fillStatus(StatRet, Status, Result);
 }
 
-std::error_code setLastModificationAndAccessTime(int FD, TimeValue Time) {
+std::error_code setLastModificationAndAccessTime(int FD, TimePoint<> Time) {
 #if defined(HAVE_FUTIMENS)
   timespec Times[2];
-  Times[0].tv_sec = Time.toEpochTime();
-  Times[0].tv_nsec = 0;
-  Times[1] = Times[0];
+  Times[0] = Times[1] = sys::toTimeSpec(Time);
   if (::futimens(FD, Times))
     return std::error_code(errno, std::generic_category());
   return std::error_code();
 #elif defined(HAVE_FUTIMES)
   timeval Times[2];
-  Times[0].tv_sec = Time.toEpochTime();
-  Times[0].tv_usec = 0;
-  Times[1] = Times[0];
+  Times[0] = Times[1] = sys::toTimeVal(
+      std::chrono::time_point_cast<std::chrono::microseconds>(Time));
   if (::futimes(FD, Times))
     return std::error_code(errno, std::generic_category());
   return std::error_code();
@@ -416,11 +479,7 @@ std::error_code mapped_file_region::init(int FD, uint64_t Offset,
                                          mapmode Mode) {
   assert(Size != 0);
 
-#if !defined(__minix)
   int flags = (Mode == readwrite) ? MAP_SHARED : MAP_PRIVATE;
-#else
-  int flags = MAP_PRIVATE;
-#endif /* ! defined(__minix) */
   int prot = (Mode == readonly) ? PROT_READ : (PROT_READ | PROT_WRITE);
   Mapping = ::mmap(nullptr, Size, prot, flags, FD, Offset);
   if (Mapping == MAP_FAILED)
@@ -505,13 +564,47 @@ std::error_code detail::directory_iterator_increment(detail::DirIterState &it) {
   return std::error_code();
 }
 
-std::error_code openFileForRead(const Twine &Name, int &ResultFD) {
+#if !defined(F_GETPATH)
+static bool hasProcSelfFD() {
+  // If we have a /proc filesystem mounted, we can quickly establish the
+  // real name of the file with readlink
+  static const bool Result = (::access("/proc/self/fd", R_OK) == 0);
+  return Result;
+}
+#endif
+
+std::error_code openFileForRead(const Twine &Name, int &ResultFD,
+                                SmallVectorImpl<char> *RealPath) {
   SmallString<128> Storage;
   StringRef P = Name.toNullTerminatedStringRef(Storage);
   while ((ResultFD = open(P.begin(), O_RDONLY)) < 0) {
     if (errno != EINTR)
       return std::error_code(errno, std::generic_category());
   }
+  // Attempt to get the real name of the file, if the user asked
+  if(!RealPath)
+    return std::error_code();
+  RealPath->clear();
+#if defined(F_GETPATH)
+  // When F_GETPATH is availble, it is the quickest way to get
+  // the real path name.
+  char Buffer[MAXPATHLEN];
+  if (::fcntl(ResultFD, F_GETPATH, Buffer) != -1)
+    RealPath->append(Buffer, Buffer + strlen(Buffer));
+#else
+  char Buffer[PATH_MAX];
+  if (hasProcSelfFD()) {
+    char ProcPath[64];
+    snprintf(ProcPath, sizeof(ProcPath), "/proc/self/fd/%d", ResultFD);
+    ssize_t CharCount = ::readlink(ProcPath, Buffer, sizeof(Buffer));
+    if (CharCount > 0)
+      RealPath->append(Buffer, Buffer + CharCount);
+  } else {
+    // Use ::realpath to get the real path name
+    if (::realpath(P.begin(), Buffer) != nullptr)
+      RealPath->append(Buffer, Buffer + strlen(Buffer));
+  }
+#endif
   return std::error_code();
 }
 
@@ -545,6 +638,53 @@ std::error_code openFileForWrite(const Twine &Name, int &ResultFD,
   return std::error_code();
 }
 
+std::error_code getPathFromOpenFD(int FD, SmallVectorImpl<char> &ResultPath) {
+  if (FD < 0)
+    return make_error_code(errc::bad_file_descriptor);
+
+#if defined(F_GETPATH)
+  // When F_GETPATH is availble, it is the quickest way to get
+  // the path from a file descriptor.
+  ResultPath.reserve(MAXPATHLEN);
+  if (::fcntl(FD, F_GETPATH, ResultPath.begin()) == -1)
+    return std::error_code(errno, std::generic_category());
+
+  ResultPath.set_size(strlen(ResultPath.begin()));
+#else
+  // If we have a /proc filesystem mounted, we can quickly establish the
+  // real name of the file with readlink. Otherwise, we don't know how to
+  // get the filename from a file descriptor. Give up.
+  if (!fs::hasProcSelfFD())
+    return make_error_code(errc::function_not_supported);
+
+  ResultPath.reserve(PATH_MAX);
+  char ProcPath[64];
+  snprintf(ProcPath, sizeof(ProcPath), "/proc/self/fd/%d", FD);
+  ssize_t CharCount = ::readlink(ProcPath, ResultPath.begin(), ResultPath.capacity());
+  if (CharCount < 0)
+      return std::error_code(errno, std::generic_category());
+
+  // Was the filename truncated?
+  if (static_cast<size_t>(CharCount) == ResultPath.capacity()) {
+    // Use lstat to get the size of the filename
+    struct stat sb;
+    if (::lstat(ProcPath, &sb) < 0)
+      return std::error_code(errno, std::generic_category());
+
+    ResultPath.reserve(sb.st_size + 1);
+    CharCount = ::readlink(ProcPath, ResultPath.begin(), ResultPath.capacity());
+    if (CharCount < 0)
+      return std::error_code(errno, std::generic_category());
+
+    // Test for race condition: did the link size change?
+    if (CharCount > sb.st_size)
+      return std::error_code(ENAMETOOLONG, std::generic_category());
+  }
+  ResultPath.set_size(static_cast<size_t>(CharCount));
+#endif
+  return std::error_code();
+}
+
 } // end namespace fs
 
 namespace path {
@@ -553,6 +693,54 @@ bool home_directory(SmallVectorImpl<char> &result) {
   if (char *RequestedDir = getenv("HOME")) {
     result.clear();
     result.append(RequestedDir, RequestedDir + strlen(RequestedDir));
+    return true;
+  }
+
+  return false;
+}
+
+static bool getDarwinConfDir(bool TempDir, SmallVectorImpl<char> &Result) {
+  #if defined(_CS_DARWIN_USER_TEMP_DIR) && defined(_CS_DARWIN_USER_CACHE_DIR)
+  // On Darwin, use DARWIN_USER_TEMP_DIR or DARWIN_USER_CACHE_DIR.
+  // macros defined in <unistd.h> on darwin >= 9
+  int ConfName = TempDir ? _CS_DARWIN_USER_TEMP_DIR
+                         : _CS_DARWIN_USER_CACHE_DIR;
+  size_t ConfLen = confstr(ConfName, nullptr, 0);
+  if (ConfLen > 0) {
+    do {
+      Result.resize(ConfLen);
+      ConfLen = confstr(ConfName, Result.data(), Result.size());
+    } while (ConfLen > 0 && ConfLen != Result.size());
+
+    if (ConfLen > 0) {
+      assert(Result.back() == 0);
+      Result.pop_back();
+      return true;
+    }
+
+    Result.clear();
+  }
+  #endif
+  return false;
+}
+
+static bool getUserCacheDir(SmallVectorImpl<char> &Result) {
+  // First try using XDG_CACHE_HOME env variable,
+  // as specified in XDG Base Directory Specification at
+  // http://standards.freedesktop.org/basedir-spec/basedir-spec-latest.html
+  if (const char *XdgCacheDir = std::getenv("XDG_CACHE_HOME")) {
+    Result.clear();
+    Result.append(XdgCacheDir, XdgCacheDir + strlen(XdgCacheDir));
+    return true;
+  }
+
+  // Try Darwin configuration query
+  if (getDarwinConfDir(false, Result))
+    return true;
+
+  // Use "$HOME/.cache" if $HOME is available
+  if (home_directory(Result)) {
+    append(Result, ".cache");
     return true;
   }
 
@@ -593,27 +781,8 @@ void system_temp_directory(bool ErasedOnReboot, SmallVectorImpl<char> &Result) {
     }
   }
 
-#if defined(_CS_DARWIN_USER_TEMP_DIR) && defined(_CS_DARWIN_USER_CACHE_DIR)
-  // On Darwin, use DARWIN_USER_TEMP_DIR or DARWIN_USER_CACHE_DIR.
-  // macros defined in <unistd.h> on darwin >= 9
-  int ConfName = ErasedOnReboot? _CS_DARWIN_USER_TEMP_DIR
-                               : _CS_DARWIN_USER_CACHE_DIR;
-  size_t ConfLen = confstr(ConfName, nullptr, 0);
-  if (ConfLen > 0) {
-    do {
-      Result.resize(ConfLen);
-      ConfLen = confstr(ConfName, Result.data(), Result.size());
-    } while (ConfLen > 0 && ConfLen != Result.size());
-
-    if (ConfLen > 0) {
-      assert(Result.back() == 0);
-      Result.pop_back();
-      return;
-    }
-
-    Result.clear();
-  }
-#endif
+  if (getDarwinConfDir(ErasedOnReboot, Result))
+    return;
 
   const char *RequestedDir = getDefaultTempDir(ErasedOnReboot);
   Result.append(RequestedDir, RequestedDir + strlen(RequestedDir));

@@ -29,8 +29,7 @@ static cl::opt<AsmWriterVariantTy> AsmWriterVariant(
     "aarch64-neon-syntax", cl::init(Default),
     cl::desc("Choose style of NEON code to emit from AArch64 backend:"),
     cl::values(clEnumValN(Generic, "generic", "Emit generic NEON assembly"),
-               clEnumValN(Apple, "apple", "Emit Apple-style NEON assembly"),
-               clEnumValEnd));
+               clEnumValN(Apple, "apple", "Emit Apple-style NEON assembly")));
 
 AArch64MCAsmInfoDarwin::AArch64MCAsmInfoDarwin() {
   // We prefer NEON instructions to be printed in the short form.
@@ -58,15 +57,14 @@ const MCExpr *AArch64MCAsmInfoDarwin::getExprForPersonalitySymbol(
   // version.
   MCContext &Context = Streamer.getContext();
   const MCExpr *Res =
-      MCSymbolRefExpr::Create(Sym, MCSymbolRefExpr::VK_GOT, Context);
-  MCSymbol *PCSym = Context.CreateTempSymbol();
+      MCSymbolRefExpr::create(Sym, MCSymbolRefExpr::VK_GOT, Context);
+  MCSymbol *PCSym = Context.createTempSymbol();
   Streamer.EmitLabel(PCSym);
-  const MCExpr *PC = MCSymbolRefExpr::Create(PCSym, Context);
-  return MCBinaryExpr::CreateSub(Res, PC, Context);
+  const MCExpr *PC = MCSymbolRefExpr::create(PCSym, Context);
+  return MCBinaryExpr::createSub(Res, PC, Context);
 }
 
-AArch64MCAsmInfoELF::AArch64MCAsmInfoELF(StringRef TT) {
-  Triple T(TT);
+AArch64MCAsmInfoELF::AArch64MCAsmInfoELF(const Triple &T) {
   if (T.getArch() == Triple::aarch64_be)
     IsLittleEndian = false;
 

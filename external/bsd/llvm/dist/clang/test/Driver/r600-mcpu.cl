@@ -1,4 +1,4 @@
-// Check that -mcpu works for all supported GPUs
+t// Check that -mcpu works for all supported GPUs
 
 // RUN: %clang -### -target r600 -x cl -S -emit-llvm -mcpu=r600 %s -o - 2>&1 | FileCheck --check-prefix=R600-CHECK %s
 // RUN: %clang -### -target r600 -x cl -S -emit-llvm -mcpu=rv630 %s -o - 2>&1 | FileCheck --check-prefix=R600-CHECK %s
@@ -35,6 +35,11 @@
 // RUN: %clang -### -target amdgcn -x cl -S -emit-llvm -mcpu=kaveri %s -o - 2>&1 | FileCheck --check-prefix=KAVERI-CHECK %s
 // RUN: %clang -### -target amdgcn -x cl -S -emit-llvm -mcpu=hawaii %s -o - 2>&1 | FileCheck --check-prefix=HAWAII-CHECK %s
 // RUN: %clang -### -target amdgcn -x cl -S -emit-llvm -mcpu=mullins %s -o - 2>&1 | FileCheck --check-prefix=MULLINS-CHECK %s
+// RUN: %clang -### -target amdgcn -x cl -S -emit-llvm -mcpu=tonga %s -o - 2>&1 | FileCheck --check-prefix=TONGA-CHECK %s
+// RUN: %clang -### -target amdgcn -x cl -S -emit-llvm -mcpu=iceland %s -o - 2>&1 | FileCheck --check-prefix=ICELAND-CHECK %s
+// RUN: %clang -### -target amdgcn -x cl -S -emit-llvm -mcpu=carrizo %s -o - 2>&1 | FileCheck --check-prefix=CARRIZO-CHECK %s
+// RUN: %clang -### -target amdgcn -x cl -S -emit-llvm -mcpu=fiji %s -o - 2>&1 | FileCheck --check-prefix=FIJI-CHECK %s
+// RUN: %clang -### -target amdgcn -x cl -S -emit-llvm -mcpu=stoney %s -o - 2>&1 | FileCheck --check-prefix=STONEY-CHECK %s
 
 // R600-CHECK:  "-target-cpu" "r600"
 // RS880-CHECK: "-target-cpu" "rs880"
@@ -60,3 +65,8 @@
 // KAVERI-CHECK: "-target-cpu" "kaveri"
 // HAWAII-CHECK: "-target-cpu" "hawaii"
 // MULLINS-CHECK: "-target-cpu" "mullins"
+// TONGA-CHECK: "-target-cpu" "tonga"
+// ICELAND-CHECK: "-target-cpu" "iceland"
+// CARRIZO-CHECK: "-target-cpu" "carrizo"
+// FIJI-CHECK: "-target-cpu" "fiji"
+// STONEY-CHECK: "-target-cpu" "stoney"

@@ -14,10 +14,11 @@
 #ifndef LLVM_LIB_TARGET_XCORE_MCTARGETDESC_XCOREMCTARGETDESC_H
 #define LLVM_LIB_TARGET_XCORE_MCTARGETDESC_XCOREMCTARGETDESC_H
 
+#include "llvm/Support/DataTypes.h"
+
 namespace llvm {
 class Target;
-
-extern Target TheXCoreTarget;
+Target &getTheXCoreTarget();
 
 } // End llvm namespace
 

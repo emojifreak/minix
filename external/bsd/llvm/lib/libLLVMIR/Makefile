@@ -1,10 +1,14 @@
-#	$NetBSD: Makefile,v 1.9 2015/01/29 20:41:35 joerg Exp $
+#	$NetBSD: Makefile,v 1.11 2017/01/11 12:02:29 joerg Exp $
 
 LIB=	LLVMIR
 
 .include <bsd.init.mk>
 
 .PATH: ${LLVM_SRCDIR}/lib/IR
+
+TABLEGEN_SRC=		AttributesCompatFunc.td
+TABLEGEN_OUTPUT= \
+	AttributesCompatFunc.inc|-gen-attrs
 
 SRCS+=	AsmWriter.cpp \
 	Attributes.cpp \
@@ -18,6 +22,7 @@ SRCS+=	AsmWriter.cpp \
 	DIBuilder.cpp \
 	DataLayout.cpp \
 	DebugInfo.cpp \
+	DebugInfoMetadata.cpp \
 	DebugLoc.cpp \
 	DiagnosticInfo.cpp \
 	DiagnosticPrinter.cpp \
@@ -38,21 +43,25 @@ SRCS+=	AsmWriter.cpp \
 	MDBuilder.cpp \
 	Mangler.cpp \
 	Metadata.cpp \
-	MetadataTracking.cpp \
 	Module.cpp \
+	ModuleSummaryIndex.cpp \
+	Operator.cpp \
+	OptBisect.cpp \
 	Pass.cpp \
 	PassManager.cpp \
 	PassRegistry.cpp \
+	ProfileSummary.cpp \
 	Statepoint.cpp \
 	Type.cpp \
 	TypeFinder.cpp \
 	Use.cpp \
-	UseListOrder.cpp \
 	User.cpp \
 	Value.cpp \
 	ValueSymbolTable.cpp \
 	ValueTypes.cpp \
 	Verifier.cpp
+
+.include "${.PARSEDIR}/../../tablegen.mk"
 
 .if defined(HOSTLIB)
 .include <bsd.hostlib.mk>

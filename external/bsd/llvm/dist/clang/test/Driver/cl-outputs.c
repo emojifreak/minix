@@ -1,16 +1,15 @@
-// Don't attempt slash switches on msys bash.
-// REQUIRES: shell-preserves-root
-
 // Note: %s must be preceded by --, otherwise it may be interpreted as a
 // command-line option, e.g. on Mac where %s is commonly under /Users.
 
 // RUN: %clang_cl /c -### -- %s 2>&1 | FileCheck -check-prefix=DEFAULT %s
+// RUN: %clang_cl /c -flto -### -- %s 2>&1 | FileCheck -check-prefix=DEFAULT %s
 // DEFAULT: "-o" "cl-outputs.obj"
 
 // RUN: %clang_cl /Fo -### -- %s 2>&1 | FileCheck -check-prefix=FoEMPTY %s
 // FoEMPTY:  "-o" "cl-outputs.obj"
 
 // RUN: %clang_cl /Foa -### -- %s 2>&1 | FileCheck -check-prefix=FoNAME %s
+// RUN: %clang_cl /Foa -flto -### -- %s 2>&1 | FileCheck -check-prefix=FoNAME %s
 // FoNAME:  "-o" "a.obj"
 
 // RUN: %clang_cl /Foa.ext /Fob.ext -### -- %s 2>&1 | FileCheck -check-prefix=FoNAMEEXT %s
@@ -249,22 +248,15 @@
 // Fi2: "-E"
 // Fi2: "-o" "foo.x"
 
+// To match MSVC behavior /o should be ignored for /P output.
+
 // RUN: %clang_cl /P /ofoo -### -- %s 2>&1 | FileCheck -check-prefix=Fio1 %s
 // Fio1: "-E"
-// Fio1: "-o" "foo.i"
+// Fio1: "-o" "cl-outputs.i"
 
-// RUN: %clang_cl /P /o foo -### -- %s 2>&1 | FileCheck -check-prefix=Fio2 %s
+// RUN: %clang_cl /P /o foo.x -### -- %s 2>&1 | FileCheck -check-prefix=Fio2 %s
 // Fio2: "-E"
-// Fio2: "-o" "foo.i"
-
-// RUN: %clang_cl /P /ofoo.x -### -- %s 2>&1 | FileCheck -check-prefix=Fio3 %s
-// Fio3: "-E"
-// Fio3: "-o" "foo.x"
-
-// RUN: %clang_cl /P /o foo.x -### -- %s 2>&1 | FileCheck -check-prefix=Fio4 %s
-// Fio4: "-E"
-// Fio4: "-o" "foo.x"
-
+// Fio2: "-o" "cl-outputs.i"
 
 // RUN: %clang_cl /P /obar.x /Fifoo.x -### -- %s 2>&1 | FileCheck -check-prefix=FioRACE1 %s
 // FioRACE1: "-E"
@@ -272,4 +264,4 @@
 
 // RUN: %clang_cl /P /Fifoo.x /obar.x -### -- %s 2>&1 | FileCheck -check-prefix=FioRACE2 %s
 // FioRACE2: "-E"
-// FioRACE2: "-o" "bar.x"
+// FioRACE2: "-o" "foo.x"

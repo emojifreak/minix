@@ -13,6 +13,21 @@ tablegen(LLVM ARMGenSubtargetInfo.inc -gen-subtarget)
 tablegen(LLVM ARMGenDisassemblerTables.inc -gen-disassembler)
 add_public_tablegen_target(ARMCommonTableGen)
 
+# Add GlobalISel files if the user wants to build it.
+set(GLOBAL_ISEL_FILES
+  ARMCallLowering.cpp
+  ARMInstructionSelector.cpp
+  ARMLegalizerInfo.cpp
+  ARMRegisterBankInfo.cpp
+  )
+
+if(LLVM_BUILD_GLOBAL_ISEL)
+  set(GLOBAL_ISEL_BUILD_FILES ${GLOBAL_ISEL_FILES})
+else()
+  set(GLOBAL_ISEL_BUILD_FILES "")
+  set(LLVM_OPTIONAL_SOURCES LLVMGlobalISel ${GLOBAL_ISEL_FILES})
+endif()
+
 add_llvm_target(ARMCodeGen
   A15SDOptimizer.cpp
   ARMAsmPrinter.cpp
@@ -40,11 +55,12 @@ add_llvm_target(ARMCodeGen
   MLxExpansionPass.cpp
   Thumb1FrameLowering.cpp
   Thumb1InstrInfo.cpp
-  Thumb1RegisterInfo.cpp
+  ThumbRegisterInfo.cpp
   Thumb2ITBlockPass.cpp
   Thumb2InstrInfo.cpp
-  Thumb2RegisterInfo.cpp
   Thumb2SizeReduction.cpp
+  ARMComputeBlockSize.cpp
+  ${GLOBAL_ISEL_BUILD_FILES}
   )
 
 add_subdirectory(TargetInfo)

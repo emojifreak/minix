@@ -137,7 +137,7 @@ void testNilReceiverHelper(int *x) {
 }
 
 void testNilReceiver(id *x) {
-  if (*x) {
+  if (*x) { // expected-note {{Assuming the condition is false}}
     // expected-note@-1 {{Taking false branch}}
     return;
   }
@@ -160,7 +160,7 @@ id testAutoreleaseTakesEffectInDispatch() {
   dispatch_once(&token, ^{});
 
   id x = [[[[NSObject alloc] init] autorelease] autorelease];
-  // expected-note@-1 {{Method returns an Objective-C object with a +1 retain count}}
+  // expected-note@-1 {{Method returns an instance of NSObject with a +1 retain count}}
   // expected-note@-2 {{Object autoreleased}}
   // expected-note@-3 {{Object autoreleased}}
 
@@ -575,9 +575,12 @@ void testNullDereferenceInDispatch() {
 // CHECK-NEXT:    <key>description</key><string>Dereference of null pointer</string>
 // CHECK-NEXT:    <key>category</key><string>Logic error</string>
 // CHECK-NEXT:    <key>type</key><string>Dereference of null pointer</string>
+// CHECK-NEXT:    <key>check_name</key><string>core.NullDereference</string>
+// CHECK-NEXT:    <!-- This hash is experimental and going to change! -->
+// CHECK-NEXT:    <key>issue_hash_content_of_line_in_context</key><string>24947a6942bfa6030ab81e53a201d816</string>
 // CHECK-NEXT:   <key>issue_context_kind</key><string>function</string>
 // CHECK-NEXT:   <key>issue_context</key><string>testReturnZeroIfNil</string>
-// CHECK-NEXT:   <key>issue_hash</key><string>1</string>
+// CHECK-NEXT:   <key>issue_hash_function_offset</key><string>1</string>
 // CHECK-NEXT:   <key>location</key>
 // CHECK-NEXT:   <dict>
 // CHECK-NEXT:    <key>line</key><integer>79</integer>
@@ -882,9 +885,12 @@ void testNullDereferenceInDispatch() {
 // CHECK-NEXT:    <key>description</key><string>Division by zero</string>
 // CHECK-NEXT:    <key>category</key><string>Logic error</string>
 // CHECK-NEXT:    <key>type</key><string>Division by zero</string>
+// CHECK-NEXT:    <key>check_name</key><string>core.DivideZero</string>
+// CHECK-NEXT:    <!-- This hash is experimental and going to change! -->
+// CHECK-NEXT:    <key>issue_hash_content_of_line_in_context</key><string>fd12d9853f5c0f7398305ff4047f4848</string>
 // CHECK-NEXT:   <key>issue_context_kind</key><string>function</string>
 // CHECK-NEXT:   <key>issue_context</key><string>testDispatchSyncInlining</string>
-// CHECK-NEXT:   <key>issue_hash</key><string>14</string>
+// CHECK-NEXT:   <key>issue_hash_function_offset</key><string>14</string>
 // CHECK-NEXT:   <key>location</key>
 // CHECK-NEXT:   <dict>
 // CHECK-NEXT:    <key>line</key><integer>101</integer>
@@ -1131,6 +1137,9 @@ void testNullDereferenceInDispatch() {
 // CHECK-NEXT:    <key>description</key><string>Variable &apos;x&apos; is uninitialized when captured by block</string>
 // CHECK-NEXT:    <key>category</key><string>Logic error</string>
 // CHECK-NEXT:    <key>type</key><string>uninitialized variable captured by block</string>
+// CHECK-NEXT:    <key>check_name</key><string>core.uninitialized.CapturedBlockVariable</string>
+// CHECK-NEXT:    <!-- This hash is experimental and going to change! -->
+// CHECK-NEXT:    <key>issue_hash_content_of_line_in_context</key><string>6763f0438bcb4337c8f8c9863b35b8c1</string>
 // CHECK-NEXT:   <key>location</key>
 // CHECK-NEXT:   <dict>
 // CHECK-NEXT:    <key>line</key><integer>118</integer>
@@ -1156,6 +1165,69 @@ void testNullDereferenceInDispatch() {
 // CHECK-NEXT:           <dict>
 // CHECK-NEXT:            <key>line</key><integer>140</integer>
 // CHECK-NEXT:            <key>col</key><integer>4</integer>
+// CHECK-NEXT:            <key>file</key><integer>0</integer>
+// CHECK-NEXT:           </dict>
+// CHECK-NEXT:          </array>
+// CHECK-NEXT:         <key>end</key>
+// CHECK-NEXT:          <array>
+// CHECK-NEXT:           <dict>
+// CHECK-NEXT:            <key>line</key><integer>140</integer>
+// CHECK-NEXT:            <key>col</key><integer>7</integer>
+// CHECK-NEXT:            <key>file</key><integer>0</integer>
+// CHECK-NEXT:           </dict>
+// CHECK-NEXT:           <dict>
+// CHECK-NEXT:            <key>line</key><integer>140</integer>
+// CHECK-NEXT:            <key>col</key><integer>7</integer>
+// CHECK-NEXT:            <key>file</key><integer>0</integer>
+// CHECK-NEXT:           </dict>
+// CHECK-NEXT:          </array>
+// CHECK-NEXT:        </dict>
+// CHECK-NEXT:       </array>
+// CHECK-NEXT:     </dict>
+// CHECK-NEXT:     <dict>
+// CHECK-NEXT:      <key>kind</key><string>event</string>
+// CHECK-NEXT:      <key>location</key>
+// CHECK-NEXT:      <dict>
+// CHECK-NEXT:       <key>line</key><integer>140</integer>
+// CHECK-NEXT:       <key>col</key><integer>7</integer>
+// CHECK-NEXT:       <key>file</key><integer>0</integer>
+// CHECK-NEXT:      </dict>
+// CHECK-NEXT:      <key>ranges</key>
+// CHECK-NEXT:      <array>
+// CHECK-NEXT:        <array>
+// CHECK-NEXT:         <dict>
+// CHECK-NEXT:          <key>line</key><integer>140</integer>
+// CHECK-NEXT:          <key>col</key><integer>7</integer>
+// CHECK-NEXT:          <key>file</key><integer>0</integer>
+// CHECK-NEXT:         </dict>
+// CHECK-NEXT:         <dict>
+// CHECK-NEXT:          <key>line</key><integer>140</integer>
+// CHECK-NEXT:          <key>col</key><integer>8</integer>
+// CHECK-NEXT:          <key>file</key><integer>0</integer>
+// CHECK-NEXT:         </dict>
+// CHECK-NEXT:        </array>
+// CHECK-NEXT:      </array>
+// CHECK-NEXT:      <key>depth</key><integer>0</integer>
+// CHECK-NEXT:      <key>extended_message</key>
+// CHECK-NEXT:      <string>Assuming the condition is false</string>
+// CHECK-NEXT:      <key>message</key>
+// CHECK-NEXT:      <string>Assuming the condition is false</string>
+// CHECK-NEXT:     </dict>
+// CHECK-NEXT:     <dict>
+// CHECK-NEXT:      <key>kind</key><string>control</string>
+// CHECK-NEXT:      <key>edges</key>
+// CHECK-NEXT:       <array>
+// CHECK-NEXT:        <dict>
+// CHECK-NEXT:         <key>start</key>
+// CHECK-NEXT:          <array>
+// CHECK-NEXT:           <dict>
+// CHECK-NEXT:            <key>line</key><integer>140</integer>
+// CHECK-NEXT:            <key>col</key><integer>7</integer>
+// CHECK-NEXT:            <key>file</key><integer>0</integer>
+// CHECK-NEXT:           </dict>
+// CHECK-NEXT:           <dict>
+// CHECK-NEXT:            <key>line</key><integer>140</integer>
+// CHECK-NEXT:            <key>col</key><integer>7</integer>
 // CHECK-NEXT:            <key>file</key><integer>0</integer>
 // CHECK-NEXT:           </dict>
 // CHECK-NEXT:          </array>
@@ -1445,9 +1517,12 @@ void testNullDereferenceInDispatch() {
 // CHECK-NEXT:    <key>description</key><string>Dereference of null pointer (loaded from variable &apos;x&apos;)</string>
 // CHECK-NEXT:    <key>category</key><string>Logic error</string>
 // CHECK-NEXT:    <key>type</key><string>Dereference of null pointer</string>
+// CHECK-NEXT:    <key>check_name</key><string>core.NullDereference</string>
+// CHECK-NEXT:    <!-- This hash is experimental and going to change! -->
+// CHECK-NEXT:    <key>issue_hash_content_of_line_in_context</key><string>d32b4cd912950f7b38ae28dbf29d9e63</string>
 // CHECK-NEXT:   <key>issue_context_kind</key><string>function</string>
 // CHECK-NEXT:   <key>issue_context</key><string>testNilReceiverHelper</string>
-// CHECK-NEXT:   <key>issue_hash</key><string>1</string>
+// CHECK-NEXT:   <key>issue_hash_function_offset</key><string>1</string>
 // CHECK-NEXT:   <key>location</key>
 // CHECK-NEXT:   <dict>
 // CHECK-NEXT:    <key>line</key><integer>135</integer>
@@ -1622,9 +1697,12 @@ void testNullDereferenceInDispatch() {
 // CHECK-NEXT:    <key>description</key><string>Array element cannot be nil</string>
 // CHECK-NEXT:    <key>category</key><string>API Misuse (Apple)</string>
 // CHECK-NEXT:    <key>type</key><string>nil argument</string>
+// CHECK-NEXT:    <key>check_name</key><string>osx.cocoa.NilArg</string>
+// CHECK-NEXT:    <!-- This hash is experimental and going to change! -->
+// CHECK-NEXT:    <key>issue_hash_content_of_line_in_context</key><string>a90589ba5d063fbfecc615bf06f84f5a</string>
 // CHECK-NEXT:   <key>issue_context_kind</key><string>function</string>
 // CHECK-NEXT:   <key>issue_context</key><string>testCreateArrayLiteral</string>
-// CHECK-NEXT:   <key>issue_hash</key><string>3</string>
+// CHECK-NEXT:   <key>issue_hash_function_offset</key><string>3</string>
 // CHECK-NEXT:   <key>location</key>
 // CHECK-NEXT:   <dict>
 // CHECK-NEXT:    <key>line</key><integer>153</integer>
@@ -1762,9 +1840,9 @@ void testNullDereferenceInDispatch() {
 // CHECK-NEXT:      </array>
 // CHECK-NEXT:      <key>depth</key><integer>0</integer>
 // CHECK-NEXT:      <key>extended_message</key>
-// CHECK-NEXT:      <string>Method returns an Objective-C object with a +1 retain count</string>
+// CHECK-NEXT:      <string>Method returns an instance of NSObject with a +1 retain count</string>
 // CHECK-NEXT:      <key>message</key>
-// CHECK-NEXT:      <string>Method returns an Objective-C object with a +1 retain count</string>
+// CHECK-NEXT:      <string>Method returns an instance of NSObject with a +1 retain count</string>
 // CHECK-NEXT:     </dict>
 // CHECK-NEXT:     <dict>
 // CHECK-NEXT:      <key>kind</key><string>control</string>
@@ -2017,9 +2095,12 @@ void testNullDereferenceInDispatch() {
 // CHECK-NEXT:    <key>description</key><string>Object autoreleased too many times</string>
 // CHECK-NEXT:    <key>category</key><string>Memory (Core Foundation/Objective-C)</string>
 // CHECK-NEXT:    <key>type</key><string>Object autoreleased too many times</string>
+// CHECK-NEXT:    <key>check_name</key><string>osx.cocoa.RetainCount</string>
+// CHECK-NEXT:    <!-- This hash is experimental and going to change! -->
+// CHECK-NEXT:    <key>issue_hash_content_of_line_in_context</key><string>a3c91a7a52619d81ebe032dcc49ebb93</string>
 // CHECK-NEXT:   <key>issue_context_kind</key><string>function</string>
 // CHECK-NEXT:   <key>issue_context</key><string>testAutoreleaseTakesEffectInDispatch</string>
-// CHECK-NEXT:   <key>issue_hash</key><string>11</string>
+// CHECK-NEXT:   <key>issue_hash_function_offset</key><string>11</string>
 // CHECK-NEXT:   <key>location</key>
 // CHECK-NEXT:   <dict>
 // CHECK-NEXT:    <key>line</key><integer>169</integer>

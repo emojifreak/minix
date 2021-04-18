@@ -1,4 +1,4 @@
-#	$NetBSD: Makefile.inc,v 1.79 2015/05/29 17:37:50 joerg Exp $
+#	$NetBSD: Makefile.inc,v 1.83 2017/02/09 17:58:57 joerg Exp $
 
 .if !defined(LLVM_TOPLEVEL_MK)
 LLVM_TOPLEVEL_MK=
@@ -6,9 +6,9 @@ LLVM_TOPLEVEL_MK=
 .include <bsd.own.mk>
 
 SVN_ROOT=		http://llvm.org/svn/llvm-project
-SVN_BRANCH=		branches/release_36
+SVN_BRANCH=		branches/release_40
 
-COMMON_REVISION=	237755
+COMMON_REVISION=	r294123
 CLANG_REVISION=		${COMMON_REVISION}
 LLD_REVISION=		${COMMON_REVISION}
 LLDB_REVISION=		${COMMON_REVISION}
@@ -17,9 +17,9 @@ LLVM_REVISION=		${COMMON_REVISION}
 MCLINKER_REVISION=	deeb2a77b4165827316f88e0a7ba4ba6b743a080
 MCLINKER_ROOT=		https://code.google.com/p/mclinker/
 
-LLVM_VERSION=		3.6.1
-CLANG_VERSION=		3.6.1
-LLD_VERSION=		3.6.1
+LLVM_VERSION=		4.0.0
+CLANG_VERSION=		4.0.0
+LLD_VERSION=		4.0.0
 
 CLANG_SRCDIR:=	${.PARSEDIR}/dist/clang
 LLD_SRCDIR:=	${.PARSEDIR}/dist/lld
@@ -27,6 +27,7 @@ LLDB_SRCDIR:=	${.PARSEDIR}/dist/lldb
 LLVM_SRCDIR:=	${.PARSEDIR}/dist/llvm
 MCLINKER_SRCDIR:=	${.PARSEDIR}/dist/mclinker
 LLVM_TOPLEVEL:=	${.PARSEDIR}
+CONFIG_DIR:=	${.PARSEDIR}/dist/llvm-configure
 
 CPPFLAGS+=	-I. -I${CLANG_SRCDIR}/include -I${LLD_SRCDIR}/include \
 		-I${LLVM_SRCDIR}/include -I${MCLINKER_SRCDIR}/include \
@@ -56,29 +57,20 @@ CXXFLAGS+=	-std=c++11
 CXXFLAGS+=	-fno-rtti -fno-exceptions
 CXXFLAGS+=	-ffunction-sections -fdata-sections
 LDFLAGS+=	-Wl,--gc-sections
+DPADD+=		${LIBEXECINFO}
+LDADD+=		-lexecinfo
 .endif
 CPPFLAGS+=	-I${LLVM_INCLUDE_OBJDIR} -I${LLVM_INCLUDE_CONFIG} \
 		-I${CLANG_INCLUDE_CONFIG} -I${MCLINKER_INCLUDE_CONFIG}
 
-.if !defined(__MINIX)
 LLVM_PLATFORM=${MACHINE_GNU_ARCH}--netbsd
-.else
-LLVM_PLATFORM=${MACHINE_GNU_ARCH}-elf32-minix
 
-LLVM_CONFIGURE_ARGS+=	\
-	--with-binutils-include=${NETBSDSRCDIR}/external/gpl3/binutils/dist/include \
-	#--disable-debug-symbols --enable-assertions
-
-.if ${HOST_OSTYPE:C/\-.*//} == "Minix"
-LLVM_CONFIGURE_ARGS+= --disable-threads
-CPPFLAGS+= -D_NLS_PRIVATE=1
-.endif # ${HOST_OSTYPE:C/\-.*//} == "Minix"
-.endif # !defined(__MINIX)
-
-LLVM_CONFIGURE_ARGS+=	\
+LLVM_CONFIGURE_ARGS=	\
 	--enable-targets=x86,powerpc,sparc,aarch64,arm,mips \
 	--with-c-include-dirs=/usr/include/clang-${CLANG_VERSION:R}:/usr/include \
 	--disable-timestamps --prefix=/usr --sysconfdir=/etc/llvm \
+	--with-clang-default-openmp-runtime=libomp \
+	--with-llvm-srcdir=${LLVM_SRCDIR} \
 	--with-clang-srcdir=${CLANG_SRCDIR} \
 	--host=${LLVM_PLATFORM} --disable-compiler-version-checks \
 	--disable-bindings llvm_cv_gnu_make_command=${MAKE}

@@ -74,7 +74,7 @@ define float @test7(float %x, float %y) {
 ; Don't crash when attempting to cast a constant FMul to an instruction.
 define void @test8(i32* %inout) {
 entry:
-  %0 = load i32* %inout, align 4
+  %0 = load i32, i32* %inout, align 4
   %conv = uitofp i32 %0 to float
   %vecinit = insertelement <4 x float> <float 0.000000e+00, float 0.000000e+00, float 0.000000e+00, float undef>, float %conv, i32 3
   %sub = fsub <4 x float> <float -0.000000e+00, float -0.000000e+00, float -0.000000e+00, float -0.000000e+00>, %vecinit
@@ -151,4 +151,33 @@ define double @sqrt_squared2(double %f) {
 ; CHECK-NEXT: %sqrt = call double @llvm.sqrt.f64(double %f)
 ; CHECK-NEXT: %mul2 = fmul double %sqrt, %f
 ; CHECK-NEXT: ret double %mul2
+}
+
+declare float @llvm.fabs.f32(float) nounwind readnone
+
+; CHECK-LABEL @fabs_squared(
+; CHECK: %mul = fmul float %x, %x
+define float @fabs_squared(float %x) {
+  %x.fabs = call float @llvm.fabs.f32(float %x)
+  %mul = fmul float %x.fabs, %x.fabs
+  ret float %mul
+}
+
+; CHECK-LABEL @fabs_squared_fast(
+; CHECK: %mul = fmul fast float %x, %x
+define float @fabs_squared_fast(float %x) {
+  %x.fabs = call float @llvm.fabs.f32(float %x)
+  %mul = fmul fast float %x.fabs, %x.fabs
+  ret float %mul
+}
+
+; CHECK-LABEL @fabs_x_fabs(
+; CHECK: call float @llvm.fabs.f32(float %x)
+; CHECK: call float @llvm.fabs.f32(float %y)
+; CHECK: %mul = fmul float %x.fabs, %y.fabs
+define float @fabs_x_fabs(float %x, float %y) {
+  %x.fabs = call float @llvm.fabs.f32(float %x)
+  %y.fabs = call float @llvm.fabs.f32(float %y)
+  %mul = fmul float %x.fabs, %y.fabs
+  ret float %mul
 }

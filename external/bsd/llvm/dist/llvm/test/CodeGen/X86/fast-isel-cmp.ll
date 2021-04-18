@@ -1,5 +1,5 @@
 ; RUN: llc < %s                             -mtriple=x86_64-apple-darwin10 | FileCheck %s --check-prefix=SDAG
-; RUN: llc < %s -fast-isel -fast-isel-abort -mtriple=x86_64-apple-darwin10 | FileCheck %s --check-prefix=FAST
+; RUN: llc < %s -fast-isel -fast-isel-abort=1 -mtriple=x86_64-apple-darwin10 | FileCheck %s --check-prefix=FAST
 
 define zeroext i1 @fcmp_oeq(float %x, float %y) {
 ; SDAG-LABEL: fcmp_oeq
@@ -285,8 +285,8 @@ define zeroext i1 @fcmp_oeq2(float %x) {
 define zeroext i1 @fcmp_oeq3(float %x) {
 ; SDAG-LABEL: fcmp_oeq3
 ; SDAG:       xorps    %xmm1, %xmm1
-; SDAG-NEXT:  cmpeqss  %xmm1, %xmm0
-; SDAG-NEXT:  movd     %xmm0, %eax
+; SDAG-NEXT:  cmpeqss  %xmm0, %xmm1
+; SDAG-NEXT:  movd     %xmm1, %eax
 ; SDAG-NEXT:  andl     $1, %eax
 ; FAST-LABEL: fcmp_oeq3
 ; FAST:       xorps    %xmm1, %xmm1
@@ -584,8 +584,8 @@ define zeroext i1 @fcmp_une2(float %x) {
 define zeroext i1 @fcmp_une3(float %x) {
 ; SDAG-LABEL: fcmp_une3
 ; SDAG:       xorps    %xmm1, %xmm1
-; SDAG-NEXT:  cmpneqss %xmm1, %xmm0
-; SDAG-NEXT:  movd     %xmm0, %eax
+; SDAG-NEXT:  cmpneqss %xmm0, %xmm1
+; SDAG-NEXT:  movd     %xmm1, %eax
 ; SDAG-NEXT:  andl     $1, %eax
 ; FAST-LABEL: fcmp_une3
 ; FAST:       xorps    %xmm1, %xmm1

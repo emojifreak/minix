@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 %s -triple i386-mingw32 -std=c++11 -fsyntax-only -Wno-unused-getter-return-value -Wno-unused-value -Wmicrosoft -verify -fms-extensions -fms-compatibility -fdelayed-template-parsing
+// RUN: %clang_cc1 %s -triple i386-pc-win32 -std=c++14 -fsyntax-only -Wno-unused-getter-return-value -Wno-unused-value -Wmicrosoft -verify -fms-extensions -fms-compatibility -fdelayed-template-parsing
 
 /* Microsoft attribute tests */
 [repeatable][source_annotation_attribute( Parameter|ReturnValue )]
@@ -49,6 +49,7 @@ struct __declspec(uuid(3)) uuid_attr_bad2 { };// expected-error {{'uuid' attribu
 struct __declspec(uuid("0000000-0000-0000-1234-0000500000047")) uuid_attr_bad3 { };// expected-error {{uuid attribute contains a malformed GUID}}
 struct __declspec(uuid("0000000-0000-0000-Z234-000000000047")) uuid_attr_bad4 { };// expected-error {{uuid attribute contains a malformed GUID}}
 struct __declspec(uuid("000000000000-0000-1234-000000000047")) uuid_attr_bad5 { };// expected-error {{uuid attribute contains a malformed GUID}}
+[uuid("000000000000-0000-1234-000000000047")] struct uuid_attr_bad6 { };// expected-error {{uuid attribute contains a malformed GUID}}
 
 __declspec(uuid("000000A0-0000-0000-C000-000000000046")) int i; // expected-warning {{'uuid' attribute only applies to classes}}
 
@@ -59,8 +60,16 @@ struct struct_without_uuid { };
 struct __declspec(uuid("000000A0-0000-0000-C000-000000000049"))
 struct_with_uuid2;
 
+[uuid("000000A0-0000-0000-C000-000000000049")] struct struct_with_uuid3;
+
 struct
 struct_with_uuid2 {} ;
+
+enum __declspec(uuid("000000A0-0000-0000-C000-000000000046"))
+enum_with_uuid { };
+enum enum_without_uuid { };
+
+int __declspec(uuid("000000A0-0000-0000-C000-000000000046")) inappropriate_uuid; // expected-warning {{'uuid' attribute only applies to classes and enumerations}}
 
 int uuid_sema_test()
 {
@@ -69,6 +78,7 @@ int uuid_sema_test()
 
    __uuidof(struct_with_uuid);
    __uuidof(struct_with_uuid2);
+   __uuidof(struct_with_uuid3);
    __uuidof(struct_without_uuid); // expected-error {{cannot call operator __uuidof on a type with no GUID}}
    __uuidof(struct_with_uuid*);
    __uuidof(struct_without_uuid*); // expected-error {{cannot call operator __uuidof on a type with no GUID}}
@@ -76,6 +86,15 @@ int uuid_sema_test()
    __uuidof(struct_with_uuid*[1]); // expected-error {{cannot call operator __uuidof on a type with no GUID}}
    __uuidof(const struct_with_uuid[1][1]);
    __uuidof(const struct_with_uuid*[1][1]); // expected-error {{cannot call operator __uuidof on a type with no GUID}}
+
+   __uuidof(enum_with_uuid);
+   __uuidof(enum_without_uuid); // expected-error {{cannot call operator __uuidof on a type with no GUID}}
+   __uuidof(enum_with_uuid*);
+   __uuidof(enum_without_uuid*); // expected-error {{cannot call operator __uuidof on a type with no GUID}}
+   __uuidof(enum_with_uuid[1]);
+   __uuidof(enum_with_uuid*[1]); // expected-error {{cannot call operator __uuidof on a type with no GUID}}
+   __uuidof(const enum_with_uuid[1][1]);
+   __uuidof(const enum_with_uuid*[1][1]); // expected-error {{cannot call operator __uuidof on a type with no GUID}}
 
    __uuidof(var_with_uuid);
    __uuidof(var_without_uuid);// expected-error {{cannot call operator __uuidof on a type with no GUID}}
@@ -339,7 +358,7 @@ void TestProperty() {
 //expected-warning@+1 {{C++ operator 'and' (aka '&&') used as a macro name}}
 #define and foo
 
-struct __declspec(uuid("00000000-0000-0000-C000-000000000046")) __declspec(novtable) IUnknown {}; // expected-warning{{__declspec attribute 'novtable' is not supported}}
+struct __declspec(uuid("00000000-0000-0000-C000-000000000046")) __declspec(novtable) IUnknown {};
 
 typedef bool (__stdcall __stdcall *blarg)(int);
 
@@ -375,3 +394,35 @@ typedef void(*ignored_quals_dummy3)(), __stdcall ignored_quals3; // expected-war
 typedef void(*ignored_quals_dummy4)(), __thiscall ignored_quals4; // expected-warning {{qualifiers after comma in declarator list are ignored}}
 typedef void(*ignored_quals_dummy5)(), __cdecl ignored_quals5; // expected-warning {{qualifiers after comma in declarator list are ignored}}
 typedef void(*ignored_quals_dummy6)(), __vectorcall ignored_quals6; // expected-warning {{qualifiers after comma in declarator list are ignored}}
+
+namespace {
+bool f(int);
+template <typename T>
+struct A {
+  constexpr A(T t) {
+    __assume(f(t)); // expected-warning{{the argument to '__assume' has side effects that will be discarded}}
+  }
+  constexpr bool g() { return false; }
+};
+constexpr A<int> h() {
+  A<int> b(0); // expected-note {{in instantiation of member function}}
+  return b;
+}
+static_assert(h().g() == false, "");
+}
+
+namespace {
+__declspec(align(16)) struct align_before_key1 {};
+__declspec(align(16)) struct align_before_key2 {} align_before_key2_var;
+__declspec(align(16)) struct align_before_key3 {} *align_before_key3_var;
+static_assert(__alignof(struct align_before_key1) == 16, "");
+static_assert(__alignof(struct align_before_key2) == 16, "");
+static_assert(__alignof(struct align_before_key3) == 16, "");
+}
+
+namespace PR24027 {
+struct S {
+  template <typename T>
+  S(T);
+} f([] {});
+}

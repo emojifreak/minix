@@ -160,7 +160,7 @@ void ffun(C &c) {
   // BITCODE: bitcast
   // BITCODE: bitcast
   // BITCODE: [[THIS1:%.+]] = bitcast %"struct.test4::C"* {{.*}} to i8*
-  // BITCODE: [[THIS2:%.+]] = getelementptr inbounds i8* [[THIS1]], i32 4
+  // BITCODE: [[THIS2:%.+]] = getelementptr inbounds i8, i8* [[THIS1]], i32 4
   // BITCODE-NEXT: call x86_thiscallcc {{.*}}(i8* [[THIS2]])
   c.bar();
 }
@@ -171,9 +171,32 @@ void fop(C &c) {
   // BITCODE: bitcast
   // BITCODE: bitcast
   // BITCODE: [[THIS1:%.+]] = bitcast %"struct.test4::C"* {{.*}} to i8*
-  // BITCODE: [[THIS2:%.+]] = getelementptr inbounds i8* [[THIS1]], i32 4
+  // BITCODE: [[THIS2:%.+]] = getelementptr inbounds i8, i8* [[THIS1]], i32 4
   // BITCODE-NEXT: call x86_thiscallcc {{.*}}(i8* [[THIS2]])
   -c;
 }
 
+}
+
+namespace pr30293 {
+struct NonTrivial {
+  ~NonTrivial();
+  int x;
+};
+struct A { virtual void f(); };
+struct B { virtual void __cdecl g(NonTrivial); };
+struct C final : A, B {
+  void f() override;
+  void __cdecl g(NonTrivial) override;
+};
+C *whatsthis;
+void C::f() { g(NonTrivial()); }
+void C::g(NonTrivial o) {
+  whatsthis = this;
+}
+
+// BITCODE-LABEL: define void @"\01?g@C@pr30293@@UAAXUNonTrivial@2@@Z"(<{ i8*, %"struct.pr30293::NonTrivial" }>* inalloca)
+// BITCODE: %[[this1:[^ ]*]] = load i8*, i8** %[[thisaddr:[^ ]*]], align 4
+// BITCODE-NEXT: %[[this2:[^ ]*]] = getelementptr inbounds i8, i8* %[[this1]], i32 -4
+// BITCODE-NEXT: store i8* %[[this2]], i8** %[[thisaddr]], align 4
 }

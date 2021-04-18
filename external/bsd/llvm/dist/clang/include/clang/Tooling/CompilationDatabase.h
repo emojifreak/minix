@@ -42,14 +42,24 @@ namespace tooling {
 /// \brief Specifies the working directory and command of a compilation.
 struct CompileCommand {
   CompileCommand() {}
-  CompileCommand(Twine Directory, std::vector<std::string> CommandLine)
-      : Directory(Directory.str()), CommandLine(std::move(CommandLine)) {}
+  CompileCommand(Twine Directory, Twine Filename,
+                 std::vector<std::string> CommandLine, Twine Output)
+      : Directory(Directory.str()),
+        Filename(Filename.str()),
+        CommandLine(std::move(CommandLine)),
+        Output(Output.str()){}
 
   /// \brief The working directory the command was executed from.
   std::string Directory;
 
+  /// The source file associated with the command.
+  std::string Filename;
+
   /// \brief The command line that was executed.
   std::vector<std::string> CommandLine;
+
+  /// The output file associated with the command.
+  std::string Output;
 
   /// \brief An optional mapping from each file's path to its content for all
   /// files needed for the compilation that are not available via the file
@@ -178,7 +188,7 @@ public:
   /// \param Argv Points to the command line arguments.
   /// \param Directory The base directory used in the FixedCompilationDatabase.
   static FixedCompilationDatabase *loadFromCommandLine(int &Argc,
-                                                       const char **Argv,
+                                                       const char *const *Argv,
                                                        Twine Directory = ".");
 
   /// \brief Constructs a compilation data base from a specified directory

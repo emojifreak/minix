@@ -15,11 +15,14 @@
 #ifndef LLVM_CLANG_SERIALIZATION_MODULE_H
 #define LLVM_CLANG_SERIALIZATION_MODULE_H
 
+#include "clang/Basic/FileManager.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Serialization/ASTBitCodes.h"
 #include "clang/Serialization/ContinuousRangeMap.h"
+#include "clang/Serialization/ModuleFileExtension.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Bitcode/BitstreamReader.h"
+#include "llvm/Support/Endian.h"
 #include <memory>
 #include <string>
 
@@ -30,7 +33,6 @@ template <typename Info> class OnDiskIterableChainedHashTable;
 
 namespace clang {
 
-class FileEntry;
 class DeclContext;
 class Module;
 
@@ -46,18 +48,8 @@ enum ModuleKind {
   MK_ExplicitModule, ///< File is an explicitly-loaded module.
   MK_PCH,            ///< File is a PCH file treated as such.
   MK_Preamble,       ///< File is a PCH file treated as the preamble.
-  MK_MainFile        ///< File is a PCH file treated as the actual main file.
-};
-
-/// \brief Information about the contents of a DeclContext.
-struct DeclContextInfo {
-  DeclContextInfo()
-    : NameLookupTableData(), LexicalDecls(), NumLexicalDecls() {}
-
-  llvm::OnDiskIterableChainedHashTable<reader::ASTDeclContextNameLookupTrait>
-    *NameLookupTableData; // an ASTDeclContextNameLookupTable.
-  const KindDeclIDPair *LexicalDecls;
-  unsigned NumLexicalDecls;
+  MK_MainFile,       ///< File is a PCH file treated as the actual main file.
+  MK_PrebuiltModule  ///< File is from a prebuilt module path.
 };
 
 /// \brief The input file that has been loaded from this AST file, along with
@@ -154,6 +146,9 @@ public:
   /// \brief Whether this precompiled header is a relocatable PCH file.
   bool RelocatablePCH;
 
+  /// \brief Whether timestamps are included in this module file.
+  bool HasTimestamps;
+
   /// \brief The file entry for the module file.
   const FileEntry *File;
 
@@ -178,8 +173,8 @@ public:
   /// \brief The global bit offset (or base) of this module
   uint64_t GlobalBitOffset;
 
-  /// \brief The bitstream reader from which we'll read the AST file.
-  llvm::BitstreamReader StreamFile;
+  /// \brief The serialized bitstream data for this file.
+  StringRef Data;
 
   /// \brief The main bitstream cursor for the main block.
   llvm::BitstreamCursor Stream;
@@ -201,12 +196,16 @@ public:
   /// \brief The first source location in this module.
   SourceLocation FirstLoc;
 
+  /// The list of extension readers that are attached to this module
+  /// file.
+  std::vector<std::unique_ptr<ModuleFileExtensionReader>> ExtensionReaders;
+
   // === Input Files ===
   /// \brief The cursor to the start of the input-files block.
   llvm::BitstreamCursor InputFilesCursor;
 
   /// \brief Offsets for all of the input file entries in the AST file.
-  const uint32_t *InputFileOffsets;
+  const llvm::support::unaligned_uint64_t *InputFileOffsets;
 
   /// \brief The input files that have been loaded from this AST file.
   std::vector<InputFile> InputFilesLoaded;
@@ -268,6 +267,10 @@ public:
   /// \brief A pointer to an on-disk hash table of opaque type
   /// IdentifierHashTable.
   void *IdentifierLookupTable;
+
+  /// \brief Offsets of identifiers that we're going to preload within
+  /// IdentifierTableData.
+  std::vector<unsigned> PreloadIdentifierOffsets;
 
   // === Macros ===
 
@@ -397,35 +400,10 @@ public:
   /// as a local ID (for this module file).
   llvm::DenseMap<ModuleFile *, serialization::DeclID> GlobalToLocalDeclIDs;
 
-  /// \brief The number of C++ base specifier sets in this AST file.
-  unsigned LocalNumCXXBaseSpecifiers;
-
-  /// \brief Offset of each C++ base specifier set within the bitstream,
-  /// indexed by the C++ base specifier set ID (-1).
-  const uint32_t *CXXBaseSpecifiersOffsets;
-
-  typedef llvm::DenseMap<const DeclContext *, DeclContextInfo>
-  DeclContextInfosMap;
-
-  /// \brief Information about the lexical and visible declarations
-  /// for each DeclContext.
-  DeclContextInfosMap DeclContextInfos;
-
   /// \brief Array of file-level DeclIDs sorted by file.
   const serialization::DeclID *FileSortedDecls;
   unsigned NumFileSortedDecls;
 
-  /// \brief Array of redeclaration chain location information within this 
-  /// module file, sorted by the first declaration ID.
-  const serialization::LocalRedeclarationsInfo *RedeclarationsMap;
-
-  /// \brief The number of redeclaration info entries in RedeclarationsMap.
-  unsigned LocalNumRedeclarationsInMap;
-  
-  /// \brief The redeclaration chains for declarations local to this
-  /// module file.
-  SmallVector<uint64_t, 1> RedeclarationChains;
-  
   /// \brief Array of category list location information within this 
   /// module file, sorted by the definition ID.
   const serialization::ObjCCategoriesInfo *ObjCCategoriesMap;
@@ -467,6 +445,12 @@ public:
   /// \brief Determine whether this module was directly imported at
   /// any point during translation.
   bool isDirectlyImported() const { return DirectlyImported; }
+
+  /// \brief Is this a module file for a module (rather than a PCH or similar).
+  bool isModule() const {
+    return Kind == MK_ImplicitModule || Kind == MK_ExplicitModule ||
+           Kind == MK_PrebuiltModule;
+  }
 
   /// \brief Dump debugging output for this module.
   void dump();

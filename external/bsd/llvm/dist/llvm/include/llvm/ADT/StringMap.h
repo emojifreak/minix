@@ -16,10 +16,18 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Allocator.h"
+#include "llvm/Support/PointerLikeTypeTraits.h"
+#include <cassert>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <utility>
+#include <initializer_list>
+#include <new>
 #include <utility>
 
 namespace llvm {
+
   template<typename ValueT>
   class StringMapConstIterator;
   template<typename ValueT>
@@ -30,6 +38,7 @@ namespace llvm {
 /// StringMapEntryBase - Shared base class of StringMapEntry instances.
 class StringMapEntryBase {
   unsigned StrLen;
+
 public:
   explicit StringMapEntryBase(unsigned Len) : StrLen(Len) {}
 
@@ -48,6 +57,7 @@ protected:
   unsigned NumItems;
   unsigned NumTombstones;
   unsigned ItemSize;
+
 protected:
   explicit StringMapImpl(unsigned itemSize)
       : TheTable(nullptr),
@@ -85,11 +95,16 @@ protected:
   /// RemoveKey - Remove the StringMapEntry for the specified key from the
   /// table, returning it.  If the key is not in the table, this returns null.
   StringMapEntryBase *RemoveKey(StringRef Key);
-private:
+
+  /// Allocate the table with the specified number of buckets and otherwise
+  /// setup the map as empty.
   void init(unsigned Size);
+
 public:
   static StringMapEntryBase *getTombstoneVal() {
-    return (StringMapEntryBase*)-1;
+    uintptr_t Val = static_cast<uintptr_t>(-1);
+    Val <<= PointerLikeTypeTraits<StringMapEntryBase *>::NumLowBitsAvailable;
+    return reinterpret_cast<StringMapEntryBase *>(Val);
   }
 
   unsigned getNumBuckets() const { return NumBuckets; }
@@ -111,15 +126,15 @@ public:
 /// and data.
 template<typename ValueTy>
 class StringMapEntry : public StringMapEntryBase {
-  StringMapEntry(StringMapEntry &E) LLVM_DELETED_FUNCTION;
 public:
   ValueTy second;
 
   explicit StringMapEntry(unsigned strLen)
     : StringMapEntryBase(strLen), second() {}
-  template <class InitTy>
-  StringMapEntry(unsigned strLen, InitTy &&V)
-      : StringMapEntryBase(strLen), second(std::forward<InitTy>(V)) {}
+  template <typename... InitTy>
+  StringMapEntry(unsigned strLen, InitTy &&... InitVals)
+      : StringMapEntryBase(strLen), second(std::forward<InitTy>(InitVals)...) {}
+  StringMapEntry(StringMapEntry &E) = delete;
 
   StringRef getKey() const {
     return StringRef(getKeyData(), getKeyLength());
@@ -137,42 +152,38 @@ public:
 
   StringRef first() const { return StringRef(getKeyData(), getKeyLength()); }
 
-  /// Create - Create a StringMapEntry for the specified key and default
-  /// construct the value.
-  template <typename AllocatorTy, typename InitType>
+  /// Create a StringMapEntry for the specified key construct the value using
+  /// \p InitiVals.
+  template <typename AllocatorTy, typename... InitTy>
   static StringMapEntry *Create(StringRef Key, AllocatorTy &Allocator,
-                                InitType &&InitVal) {
+                                InitTy &&... InitVals) {
     unsigned KeyLength = Key.size();
 
     // Allocate a new item with space for the string at the end and a null
     // terminator.
     unsigned AllocSize = static_cast<unsigned>(sizeof(StringMapEntry))+
       KeyLength+1;
-    unsigned Alignment = alignOf<StringMapEntry>();
+    unsigned Alignment = alignof(StringMapEntry);
 
     StringMapEntry *NewItem =
       static_cast<StringMapEntry*>(Allocator.Allocate(AllocSize,Alignment));
 
-    // Default construct the value.
-    new (NewItem) StringMapEntry(KeyLength, std::forward<InitType>(InitVal));
+    // Construct the value.
+    new (NewItem) StringMapEntry(KeyLength, std::forward<InitTy>(InitVals)...);
 
     // Copy the string information.
     char *StrBuffer = const_cast<char*>(NewItem->getKeyData());
-    memcpy(StrBuffer, Key.data(), KeyLength);
+    if (KeyLength > 0)
+      memcpy(StrBuffer, Key.data(), KeyLength);
     StrBuffer[KeyLength] = 0;  // Null terminate for convenience of clients.
     return NewItem;
   }
 
-  template<typename AllocatorTy>
-  static StringMapEntry *Create(StringRef Key, AllocatorTy &Allocator) {
-    return Create(Key, Allocator, ValueTy());
-  }
-
   /// Create - Create a StringMapEntry with normal malloc/free.
-  template<typename InitType>
-  static StringMapEntry *Create(StringRef Key, InitType &&InitVal) {
+  template <typename... InitType>
+  static StringMapEntry *Create(StringRef Key, InitType &&... InitVal) {
     MallocAllocator A;
-    return Create(Key, A, std::forward<InitType>(InitVal));
+    return Create(Key, A, std::forward<InitType>(InitVal)...);
   }
 
   static StringMapEntry *Create(StringRef Key) {
@@ -204,7 +215,6 @@ public:
   }
 };
 
-
 /// StringMap - This is an unconventional map that is specialized for handling
 /// keys that are "strings", which are basically ranges of bytes. This does some
 /// funky memory allocation and hashing things to make it extremely efficient,
@@ -212,9 +222,10 @@ public:
 template<typename ValueTy, typename AllocatorTy = MallocAllocator>
 class StringMap : public StringMapImpl {
   AllocatorTy Allocator;
+
 public:
   typedef StringMapEntry<ValueTy> MapEntryTy;
-  
+
   StringMap() : StringMapImpl(static_cast<unsigned>(sizeof(MapEntryTy))) {}
   explicit StringMap(unsigned InitialSize)
     : StringMapImpl(InitialSize, static_cast<unsigned>(sizeof(MapEntryTy))) {}
@@ -226,6 +237,13 @@ public:
     : StringMapImpl(InitialSize, static_cast<unsigned>(sizeof(MapEntryTy))),
       Allocator(A) {}
 
+  StringMap(std::initializer_list<std::pair<StringRef, ValueTy>> List)
+      : StringMapImpl(List.size(), static_cast<unsigned>(sizeof(MapEntryTy))) {
+    for (const auto &P : List) {
+      insert(P);
+    }
+  }
+
   StringMap(StringMap &&RHS)
       : StringMapImpl(std::move(RHS)), Allocator(std::move(RHS.Allocator)) {}
 
@@ -235,7 +253,40 @@ public:
     return *this;
   }
 
-  // FIXME: Implement copy operations if/when they're needed.
+  StringMap(const StringMap &RHS) :
+    StringMapImpl(static_cast<unsigned>(sizeof(MapEntryTy))),
+    Allocator(RHS.Allocator) {
+    if (RHS.empty())
+      return;
+
+    // Allocate TheTable of the same size as RHS's TheTable, and set the
+    // sentinel appropriately (and NumBuckets).
+    init(RHS.NumBuckets);
+    unsigned *HashTable = (unsigned *)(TheTable + NumBuckets + 1),
+             *RHSHashTable = (unsigned *)(RHS.TheTable + NumBuckets + 1);
+
+    NumItems = RHS.NumItems;
+    NumTombstones = RHS.NumTombstones;
+    for (unsigned I = 0, E = NumBuckets; I != E; ++I) {
+      StringMapEntryBase *Bucket = RHS.TheTable[I];
+      if (!Bucket || Bucket == getTombstoneVal()) {
+        TheTable[I] = Bucket;
+        continue;
+      }
+
+      TheTable[I] = MapEntryTy::Create(
+          static_cast<MapEntryTy *>(Bucket)->getKey(), Allocator,
+          static_cast<MapEntryTy *>(Bucket)->getValue());
+      HashTable[I] = RHSHashTable[I];
+    }
+
+    // Note that here we've copied everything from the RHS into this object,
+    // tombstones included. We could, instead, have re-probed for each key to
+    // instantiate this new object without any tombstone buckets. The
+    // assumption here is that items are rarely deleted from most StringMaps,
+    // and so tombstones are rare, so the cost of re-probing for all inputs is
+    // not worthwhile.
+  }
 
   AllocatorTy &getAllocator() { return Allocator; }
   const AllocatorTy &getAllocator() const { return Allocator; }
@@ -282,9 +333,9 @@ public:
     return ValueTy();
   }
 
-  ValueTy &operator[](StringRef Key) {
-    return insert(std::make_pair(Key, ValueTy())).first->second;
-  }
+  /// Lookup the ValueTy for the \p Key, or create a default constructed value
+  /// if the key is not in the map.
+  ValueTy &operator[](StringRef Key) { return try_emplace(Key).first->second; }
 
   /// count - Return 1 if the element is in the map, 0 otherwise.
   size_type count(StringRef Key) const {
@@ -315,7 +366,16 @@ public:
   /// if and only if the insertion takes place, and the iterator component of
   /// the pair points to the element with key equivalent to the key of the pair.
   std::pair<iterator, bool> insert(std::pair<StringRef, ValueTy> KV) {
-    unsigned BucketNo = LookupBucketFor(KV.first);
+    return try_emplace(KV.first, std::move(KV.second));
+  }
+
+  /// Emplace a new element for the specified key into the map if the key isn't
+  /// already in the map. The bool component of the returned pair is true
+  /// if and only if the insertion takes place, and the iterator component of
+  /// the pair points to the element with key equivalent to the key of the pair.
+  template <typename... ArgsTy>
+  std::pair<iterator, bool> try_emplace(StringRef Key, ArgsTy &&... Args) {
+    unsigned BucketNo = LookupBucketFor(Key);
     StringMapEntryBase *&Bucket = TheTable[BucketNo];
     if (Bucket && Bucket != getTombstoneVal())
       return std::make_pair(iterator(TheTable + BucketNo, false),
@@ -323,8 +383,7 @@ public:
 
     if (Bucket == getTombstoneVal())
       --NumTombstones;
-    Bucket =
-        MapEntryTy::Create(KV.first, Allocator, std::move(KV.second));
+    Bucket = MapEntryTy::Create(Key, Allocator, std::forward<ArgsTy>(Args)...);
     ++NumItems;
     assert(NumItems + NumTombstones <= NumBuckets);
 
@@ -385,15 +444,14 @@ public:
   }
 };
 
-
-template<typename ValueTy>
-class StringMapConstIterator {
+template <typename ValueTy> class StringMapConstIterator {
 protected:
-  StringMapEntryBase **Ptr;
+  StringMapEntryBase **Ptr = nullptr;
+
 public:
   typedef StringMapEntry<ValueTy> value_type;
 
-  StringMapConstIterator() : Ptr(nullptr) { }
+  StringMapConstIterator() = default;
 
   explicit StringMapConstIterator(StringMapEntryBase **Bucket,
                                   bool NoAdvance = false)
@@ -434,11 +492,13 @@ private:
 template<typename ValueTy>
 class StringMapIterator : public StringMapConstIterator<ValueTy> {
 public:
-  StringMapIterator() {}
+  StringMapIterator() = default;
+
   explicit StringMapIterator(StringMapEntryBase **Bucket,
                              bool NoAdvance = false)
     : StringMapConstIterator<ValueTy>(Bucket, NoAdvance) {
   }
+
   StringMapEntry<ValueTy> &operator*() const {
     return *static_cast<StringMapEntry<ValueTy>*>(*this->Ptr);
   }
@@ -447,6 +507,6 @@ public:
   }
 };
 
-}
+} // end namespace llvm
 
-#endif
+#endif // LLVM_ADT_STRINGMAP_H

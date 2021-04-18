@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -emit-llvm -fobjc-arc -g -triple x86_64-apple-darwin10 %s -o - | FileCheck %s
+// RUN: %clang_cc1 -emit-llvm -fobjc-arc -debug-info-kind=limited -triple x86_64-apple-darwin10 %s -o - | FileCheck %s
 // Ensure that the line info is making sense:
 // ARC cleanups should be at the closing '}'.
 @protocol NSObject
@@ -30,10 +30,11 @@ NSRect NSMakeRect(CGFloat x, CGFloat y, CGFloat w, CGFloat h);
   // CHECK: define {{.*}}_createBezierPathWithWidth
   // CHECK: load {{.*}} %path, align {{.*}}, !dbg ![[RET:[0-9]+]]
   // CHECK: call void @objc_storeStrong{{.*}} !dbg ![[ARC:[0-9]+]]
-  // CHECK: call {{.*}} @objc_autoreleaseReturnValue{{.*}} !dbg ![[ARC]]
+  // CHECK: call {{.*}} @objc_autoreleaseReturnValue{{.*}} !dbg ![[ARC1:[0-9]+]]
   // CHECK: ret {{.*}} !dbg ![[ARC]]
-  // CHECK: ![[RET]] = !MDLocation(line: [[@LINE+1]], scope: !{{.*}})
+  // CHECK: ![[RET]] = !DILocation(line: [[@LINE+1]], scope: !{{.*}})
   return path;
-  // CHECK: ![[ARC]] = !MDLocation(line: [[@LINE+1]], scope: !{{.*}})
+  // CHECK: ![[ARC]] = !DILocation(line: [[@LINE+2]], scope: !{{.*}})
+  // CHECK: ![[ARC1]] = !DILocation(line: [[@LINE+1]], scope: !{{.*}})
 }
 @end

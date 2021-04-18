@@ -62,8 +62,11 @@ public:
                                  std::vector<std::string>& Args,
                                  Language L);
 
+  template <typename MatcherType>
+  testing::AssertionResult match(const Decl *D, const MatcherType &AMatcher);
+
 protected:
-  virtual void run(const MatchFinder::MatchResult &Result);
+  void run(const MatchFinder::MatchResult &Result) override;
   virtual void verify(const MatchFinder::MatchResult &Result,
                       const NodeType &Node) {}
 
@@ -127,6 +130,22 @@ testing::AssertionResult MatchVerifier<NodeType>::match(
   return testing::AssertionSuccess();
 }
 
+/// \brief Runs a matcher over some AST, and returns the result of the
+/// verifier for the matched node.
+template <typename NodeType> template <typename MatcherType>
+testing::AssertionResult MatchVerifier<NodeType>::match(
+    const Decl *D, const MatcherType &AMatcher) {
+  MatchFinder Finder;
+  Finder.addMatcher(AMatcher.bind(""), this);
+
+  setFailure("Could not find match");
+  Finder.match(*D, D->getASTContext());
+
+  if (!Verified)
+    return testing::AssertionFailure() << VerifyResult;
+  return testing::AssertionSuccess();
+}
+
 template <typename NodeType>
 void MatchVerifier<NodeType>::run(const MatchFinder::MatchResult &Result) {
   const NodeType *Node = Result.Nodes.getNodeAs<NodeType>("");
@@ -166,7 +185,8 @@ public:
   }
 
 protected:
-  void verify(const MatchFinder::MatchResult &Result, const NodeType &Node) {
+  void verify(const MatchFinder::MatchResult &Result,
+              const NodeType &Node) override {
     SourceLocation Loc = getLocation(Node);
     unsigned Line = Result.SourceManager->getSpellingLineNumber(Loc);
     unsigned Column = Result.SourceManager->getSpellingColumnNumber(Loc);
@@ -205,7 +225,8 @@ public:
   }
 
 protected:
-  void verify(const MatchFinder::MatchResult &Result, const NodeType &Node) {
+  void verify(const MatchFinder::MatchResult &Result,
+              const NodeType &Node) override {
     SourceRange R = getRange(Node);
     SourceLocation Begin = R.getBegin();
     SourceLocation End = R.getEnd();
@@ -244,7 +265,7 @@ public:
 
 protected:
   void verify(const MatchFinder::MatchResult &Result,
-              const ast_type_traits::DynTypedNode &Node) {
+              const ast_type_traits::DynTypedNode &Node) override {
     std::string DumpStr;
     llvm::raw_string_ostream Dump(DumpStr);
     Node.dump(Dump, *Result.SourceManager);
@@ -271,7 +292,7 @@ public:
 
 protected:
   void verify(const MatchFinder::MatchResult &Result,
-              const ast_type_traits::DynTypedNode &Node) {
+              const ast_type_traits::DynTypedNode &Node) override {
     std::string PrintStr;
     llvm::raw_string_ostream Print(PrintStr);
     Node.print(Print, Result.Context->getPrintingPolicy());

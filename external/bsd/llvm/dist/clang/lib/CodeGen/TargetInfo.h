@@ -29,15 +29,14 @@ class Value;
 }
 
 namespace clang {
-class ABIInfo;
 class Decl;
 
 namespace CodeGen {
+class ABIInfo;
 class CallArgList;
 class CodeGenModule;
 class CodeGenFunction;
 class CGFunctionInfo;
-}
 
 /// TargetCodeGenInfo - This class organizes various target-specific
 /// codegeneration issues, like target-specific attributes, builtins and so
@@ -47,18 +46,18 @@ class TargetCodeGenInfo {
 
 public:
   // WARNING: Acquires the ownership of ABIInfo.
-  TargetCodeGenInfo(ABIInfo *info = 0) : Info(info) {}
+  TargetCodeGenInfo(ABIInfo *info = nullptr) : Info(info) {}
   virtual ~TargetCodeGenInfo();
 
   /// getABIInfo() - Returns ABI info helper for the target.
   const ABIInfo &getABIInfo() const { return *Info; }
 
-  /// SetTargetAttributes - Provides a convenient hook to handle extra
+  /// setTargetAttributes - Provides a convenient hook to handle extra
   /// target-specific attributes for the given global.
-  virtual void SetTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
+  virtual void setTargetAttributes(const Decl *D, llvm::GlobalValue *GV,
                                    CodeGen::CodeGenModule &M) const {}
 
-  /// EmitTargetMD - Provides a convenient hook to handle extra
+  /// emitTargetMD - Provides a convenient hook to handle extra
   /// target-specific metadata for the given global.
   virtual void emitTargetMD(const Decl *D, llvm::GlobalValue *GV,
                             CodeGen::CodeGenModule &M) const {}
@@ -219,13 +218,27 @@ public:
                                        llvm::StringRef Value,
                                        llvm::SmallString<32> &Opt) const {}
 
-  /// Gets the target-specific default alignment used when an 'aligned' clause
-  /// is used with a 'simd' OpenMP directive without specifying a specific
-  /// alignment.
-  virtual unsigned getOpenMPSimdDefaultAlignment(QualType Type) const {
-    return 0;
-  }
-};
-}
+  /// Get LLVM calling convention for OpenCL kernel.
+  virtual unsigned getOpenCLKernelCallingConv() const;
 
-#endif
+  /// Get target specific null pointer.
+  /// \param T is the LLVM type of the null pointer.
+  /// \param QT is the clang QualType of the null pointer.
+  /// \return ConstantPointerNull with the given type \p T.
+  /// Each target can override it to return its own desired constant value.
+  virtual llvm::Constant *getNullPointer(const CodeGen::CodeGenModule &CGM,
+      llvm::PointerType *T, QualType QT) const;
+
+  /// Perform address space cast of an expression of pointer type.
+  /// \param V is the LLVM value to be casted to another address space.
+  /// \param SrcTy is the QualType of \p V.
+  /// \param DestTy is the destination QualType.
+  virtual llvm::Value *performAddrSpaceCast(CodeGen::CodeGenFunction &CGF,
+      llvm::Value *V, QualType SrcTy, QualType DestTy) const;
+
+};
+
+} // namespace CodeGen
+} // namespace clang
+
+#endif // LLVM_CLANG_LIB_CODEGEN_TARGETINFO_H

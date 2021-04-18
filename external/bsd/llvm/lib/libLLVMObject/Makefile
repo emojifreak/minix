@@ -1,27 +1,30 @@
-#	$NetBSD: Makefile,v 1.11 2014/08/10 17:34:22 joerg Exp $
+#	$NetBSD: Makefile,v 1.14 2017/02/09 17:58:57 joerg Exp $
 
 LIB=	LLVMObject
-NOGCCERROR=	yes
 
 .include <bsd.init.mk>
 
 .PATH: ${LLVM_SRCDIR}/lib/Object
 
 SRCS+=	Archive.cpp \
+	ArchiveWriter.cpp \
 	Binary.cpp \
 	COFFObjectFile.cpp \
-	COFFYAML.cpp \
+	Decompressor.cpp \
 	ELF.cpp \
 	ELFObjectFile.cpp \
-	ELFYAML.cpp \
 	Error.cpp \
 	IRObjectFile.cpp \
 	MachOObjectFile.cpp \
 	MachOUniversal.cpp \
+	ModuleSummaryIndexObjectFile.cpp \
+	ModuleSymbolTable.cpp \
 	Object.cpp \
 	ObjectFile.cpp \
 	RecordStreamer.cpp \
-	SymbolicFile.cpp
+	SymbolSize.cpp \
+	SymbolicFile.cpp \
+	WasmObjectFile.cpp \
 
 .if defined(HOSTLIB)
 .include <bsd.hostlib.mk>

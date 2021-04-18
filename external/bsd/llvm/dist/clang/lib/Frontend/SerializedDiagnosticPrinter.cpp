@@ -10,9 +10,7 @@
 #include "clang/Frontend/SerializedDiagnosticPrinter.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticOptions.h"
-#include "clang/Basic/FileManager.h"
 #include "clang/Basic/SourceManager.h"
-#include "clang/Basic/Version.h"
 #include "clang/Frontend/DiagnosticRenderer.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/Frontend/SerializedDiagnosticReader.h"
@@ -20,10 +18,11 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Lex/Lexer.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
-#include <vector>
+#include <utility>
 
 using namespace clang;
 using namespace clang::serialized_diags;
@@ -50,6 +49,7 @@ public:
  
 typedef SmallVector<uint64_t, 64> RecordData;
 typedef SmallVectorImpl<uint64_t> RecordDataImpl;
+typedef ArrayRef<uint64_t> RecordDataRef;
 
 class SDiagsWriter;
   
@@ -60,8 +60,8 @@ public:
                  DiagnosticOptions *DiagOpts)
     : DiagnosticNoteRenderer(LangOpts, DiagOpts), Writer(Writer) {}
 
-  virtual ~SDiagsRenderer() {}
-  
+  ~SDiagsRenderer() override {}
+
 protected:
   void emitDiagnosticMessage(SourceLocation Loc,
                              PresumedLoc PLoc,
@@ -143,21 +143,21 @@ class SDiagsWriter : public DiagnosticConsumer {
 
   struct SharedState;
 
-  explicit SDiagsWriter(IntrusiveRefCntPtr<SharedState> State)
+  explicit SDiagsWriter(std::shared_ptr<SharedState> State)
       : LangOpts(nullptr), OriginalInstance(false), MergeChildRecords(false),
-        State(State) {}
+        State(std::move(State)) {}
 
 public:
   SDiagsWriter(StringRef File, DiagnosticOptions *Diags, bool MergeChildRecords)
       : LangOpts(nullptr), OriginalInstance(true),
         MergeChildRecords(MergeChildRecords),
-        State(new SharedState(File, Diags)) {
+        State(std::make_shared<SharedState>(File, Diags)) {
     if (MergeChildRecords)
       RemoveOldDiagnostics();
     EmitPreamble();
   }
 
-  ~SDiagsWriter() {}
+  ~SDiagsWriter() override {}
 
   void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
                         const Diagnostic &Info) override;
@@ -251,7 +251,7 @@ private:
 
   /// \brief State that is shared among the various clones of this diagnostic
   /// consumer.
-  struct SharedState : RefCountedBase<SharedState> {
+  struct SharedState {
     SharedState(StringRef File, DiagnosticOptions *Diags)
         : DiagOpts(Diags), Stream(Buffer), OutputFile(File.str()),
           EmittedAnyDiagBlocks(false) {}
@@ -299,7 +299,7 @@ private:
   };
 
   /// \brief State shared among the various clones of this diagnostic consumer.
-  IntrusiveRefCntPtr<SharedState> State;
+  std::shared_ptr<SharedState> State;
 };
 } // end anonymous namespace
 
@@ -392,13 +392,9 @@ unsigned SDiagsWriter::getEmitFile(const char *FileName){
   
   // Lazily generate the record for the file.
   entry = State->Files.size();
-  RecordData Record;
-  Record.push_back(RECORD_FILENAME);
-  Record.push_back(entry);
-  Record.push_back(0); // For legacy.
-  Record.push_back(0); // For legacy.
   StringRef Name(FileName);
-  Record.push_back(Name.size());
+  RecordData::value_type Record[] = {RECORD_FILENAME, entry, 0 /* For legacy */,
+                                     0 /* For legacy */, Name.size()};
   State->Stream.EmitRecordWithBlob(State->Abbrevs.get(RECORD_FILENAME), Record,
                                    Name);
 
@@ -426,21 +422,21 @@ void SDiagsWriter::EmitPreamble() {
   EmitMetaBlock();
 }
 
-static void AddSourceLocationAbbrev(llvm::BitCodeAbbrev *Abbrev) {
+static void AddSourceLocationAbbrev(llvm::BitCodeAbbrev &Abbrev) {
   using namespace llvm;
-  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 10)); // File ID.
-  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // Line.
-  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // Column.
-  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // Offset;
+  Abbrev.Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 10)); // File ID.
+  Abbrev.Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // Line.
+  Abbrev.Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // Column.
+  Abbrev.Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // Offset;
 }
 
-static void AddRangeLocationAbbrev(llvm::BitCodeAbbrev *Abbrev) {
+static void AddRangeLocationAbbrev(llvm::BitCodeAbbrev &Abbrev) {
   AddSourceLocationAbbrev(Abbrev);
   AddSourceLocationAbbrev(Abbrev);  
 }
 
 void SDiagsWriter::EmitBlockInfoBlock() {
-  State->Stream.EnterBlockInfoBlock(3);
+  State->Stream.EnterBlockInfoBlock();
 
   using namespace llvm;
   llvm::BitstreamWriter &Stream = State->Stream;
@@ -453,7 +449,7 @@ void SDiagsWriter::EmitBlockInfoBlock() {
 
   EmitBlockID(BLOCK_META, "Meta", Stream, Record);
   EmitRecordID(RECORD_VERSION, "Version", Stream, Record);
-  BitCodeAbbrev *Abbrev = new BitCodeAbbrev();
+  auto Abbrev = std::make_shared<BitCodeAbbrev>();
   Abbrev->Add(BitCodeAbbrevOp(RECORD_VERSION));
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32));
   Abbrevs.set(RECORD_VERSION, Stream.EmitBlockInfoAbbrev(BLOCK_META, Abbrev));
@@ -471,18 +467,18 @@ void SDiagsWriter::EmitBlockInfoBlock() {
   EmitRecordID(RECORD_FIXIT, "FixIt", Stream, Record);
 
   // Emit abbreviation for RECORD_DIAG.
-  Abbrev = new BitCodeAbbrev();
+  Abbrev = std::make_shared<BitCodeAbbrev>();
   Abbrev->Add(BitCodeAbbrevOp(RECORD_DIAG));
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 3));  // Diag level.
-  AddSourceLocationAbbrev(Abbrev);
+  AddSourceLocationAbbrev(*Abbrev);
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 10)); // Category.  
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 10)); // Mapped Diag ID.
-  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // Text size.
+  Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::VBR, 16)); // Text size.
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob)); // Diagnostc text.
   Abbrevs.set(RECORD_DIAG, Stream.EmitBlockInfoAbbrev(BLOCK_DIAG, Abbrev));
   
   // Emit abbrevation for RECORD_CATEGORY.
-  Abbrev = new BitCodeAbbrev();
+  Abbrev = std::make_shared<BitCodeAbbrev>();
   Abbrev->Add(BitCodeAbbrevOp(RECORD_CATEGORY));
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // Category ID.
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 8));  // Text size.
@@ -490,14 +486,14 @@ void SDiagsWriter::EmitBlockInfoBlock() {
   Abbrevs.set(RECORD_CATEGORY, Stream.EmitBlockInfoAbbrev(BLOCK_DIAG, Abbrev));
 
   // Emit abbrevation for RECORD_SOURCE_RANGE.
-  Abbrev = new BitCodeAbbrev();
+  Abbrev = std::make_shared<BitCodeAbbrev>();
   Abbrev->Add(BitCodeAbbrevOp(RECORD_SOURCE_RANGE));
-  AddRangeLocationAbbrev(Abbrev);
+  AddRangeLocationAbbrev(*Abbrev);
   Abbrevs.set(RECORD_SOURCE_RANGE,
               Stream.EmitBlockInfoAbbrev(BLOCK_DIAG, Abbrev));
   
   // Emit the abbreviation for RECORD_DIAG_FLAG.
-  Abbrev = new BitCodeAbbrev();
+  Abbrev = std::make_shared<BitCodeAbbrev>();
   Abbrev->Add(BitCodeAbbrevOp(RECORD_DIAG_FLAG));
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 10)); // Mapped Diag ID.
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // Text size.
@@ -506,7 +502,7 @@ void SDiagsWriter::EmitBlockInfoBlock() {
                                                            Abbrev));
   
   // Emit the abbreviation for RECORD_FILENAME.
-  Abbrev = new BitCodeAbbrev();
+  Abbrev = std::make_shared<BitCodeAbbrev>();
   Abbrev->Add(BitCodeAbbrevOp(RECORD_FILENAME));
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 10)); // Mapped file ID.
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 32)); // Size.
@@ -517,9 +513,9 @@ void SDiagsWriter::EmitBlockInfoBlock() {
                                                           Abbrev));
   
   // Emit the abbreviation for RECORD_FIXIT.
-  Abbrev = new BitCodeAbbrev();
+  Abbrev = std::make_shared<BitCodeAbbrev>();
   Abbrev->Add(BitCodeAbbrevOp(RECORD_FIXIT));
-  AddRangeLocationAbbrev(Abbrev);
+  AddRangeLocationAbbrev(*Abbrev);
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Fixed, 16)); // Text size.
   Abbrev->Add(BitCodeAbbrevOp(BitCodeAbbrevOp::Blob));      // FixIt text.
   Abbrevs.set(RECORD_FIXIT, Stream.EmitBlockInfoAbbrev(BLOCK_DIAG,
@@ -530,14 +526,11 @@ void SDiagsWriter::EmitBlockInfoBlock() {
 
 void SDiagsWriter::EmitMetaBlock() {
   llvm::BitstreamWriter &Stream = State->Stream;
-  RecordData &Record = State->Record;
   AbbreviationMap &Abbrevs = State->Abbrevs;
 
   Stream.EnterSubblock(BLOCK_META, 3);
-  Record.clear();
-  Record.push_back(RECORD_VERSION);
-  Record.push_back(VersionNumber);
-  Stream.EmitRecordWithAbbrev(Abbrevs.get(RECORD_VERSION), Record);  
+  RecordData::value_type Record[] = {RECORD_VERSION, VersionNumber};
+  Stream.EmitRecordWithAbbrev(Abbrevs.get(RECORD_VERSION), Record);
   Stream.ExitBlock();
 }
 
@@ -547,11 +540,8 @@ unsigned SDiagsWriter::getEmitCategory(unsigned int category) {
 
   // We use a local version of 'Record' so that we can be generating
   // another record when we lazily generate one for the category entry.
-  RecordData Record;
-  Record.push_back(RECORD_CATEGORY);
-  Record.push_back(category);
   StringRef catName = DiagnosticIDs::getCategoryNameFromID(category);
-  Record.push_back(catName.size());
+  RecordData::value_type Record[] = {RECORD_CATEGORY, category, catName.size()};
   State->Stream.EmitRecordWithBlob(State->Abbrevs.get(RECORD_CATEGORY), Record,
                                    catName);
   
@@ -580,10 +570,8 @@ unsigned SDiagsWriter::getEmitDiagnosticFlag(StringRef FlagName) {
     entry.second = FlagName;
     
     // Lazily emit the string in a separate record.
-    RecordData Record;
-    Record.push_back(RECORD_DIAG_FLAG);
-    Record.push_back(entry.first);
-    Record.push_back(FlagName.size());
+    RecordData::value_type Record[] = {RECORD_DIAG_FLAG, entry.first,
+                                       FlagName.size()};
     State->Stream.EmitRecordWithBlob(State->Abbrevs.get(RECORD_DIAG_FLAG),
                                      Record, FlagName);
   }
@@ -631,7 +619,7 @@ void SDiagsWriter::HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
          "Unexpected diagnostic with valid location outside of a source file");
   SDiagsRenderer Renderer(*this, *LangOpts, &*State->DiagOpts);
   Renderer.emitDiagnostic(Info.getLocation(), DiagLevel,
-                          State->diagBuf.str(),
+                          State->diagBuf,
                           Info.getRanges(),
                           Info.getFixItHints(),
                           &Info.getSourceManager(),
@@ -843,17 +831,9 @@ std::error_code SDiagsMerger::visitEndOfDiagnostic() {
 std::error_code
 SDiagsMerger::visitSourceRangeRecord(const serialized_diags::Location &Start,
                                      const serialized_diags::Location &End) {
-  RecordData Record;
-  Record.push_back(RECORD_SOURCE_RANGE);
-  Record.push_back(FileLookup[Start.FileID]);
-  Record.push_back(Start.Line);
-  Record.push_back(Start.Col);
-  Record.push_back(Start.Offset);
-  Record.push_back(FileLookup[End.FileID]);
-  Record.push_back(End.Line);
-  Record.push_back(End.Col);
-  Record.push_back(End.Offset);
-
+  RecordData::value_type Record[] = {
+      RECORD_SOURCE_RANGE, FileLookup[Start.FileID], Start.Line, Start.Col,
+      Start.Offset, FileLookup[End.FileID], End.Line, End.Col, End.Offset};
   Writer.State->Stream.EmitRecordWithAbbrev(
       Writer.State->Abbrevs.get(RECORD_SOURCE_RANGE), Record);
   return std::error_code();
@@ -862,19 +842,13 @@ SDiagsMerger::visitSourceRangeRecord(const serialized_diags::Location &Start,
 std::error_code SDiagsMerger::visitDiagnosticRecord(
     unsigned Severity, const serialized_diags::Location &Location,
     unsigned Category, unsigned Flag, StringRef Message) {
-  RecordData MergedRecord;
-  MergedRecord.push_back(RECORD_DIAG);
-  MergedRecord.push_back(Severity);
-  MergedRecord.push_back(FileLookup[Location.FileID]);
-  MergedRecord.push_back(Location.Line);
-  MergedRecord.push_back(Location.Col);
-  MergedRecord.push_back(Location.Offset);
-  MergedRecord.push_back(CategoryLookup[Category]);
-  MergedRecord.push_back(Flag ? DiagFlagLookup[Flag] : 0);
-  MergedRecord.push_back(Message.size());
+  RecordData::value_type Record[] = {
+      RECORD_DIAG, Severity, FileLookup[Location.FileID], Location.Line,
+      Location.Col, Location.Offset, CategoryLookup[Category],
+      Flag ? DiagFlagLookup[Flag] : 0, Message.size()};
 
   Writer.State->Stream.EmitRecordWithBlob(
-      Writer.State->Abbrevs.get(RECORD_DIAG), MergedRecord, Message);
+      Writer.State->Abbrevs.get(RECORD_DIAG), Record, Message);
   return std::error_code();
 }
 
@@ -882,17 +856,10 @@ std::error_code
 SDiagsMerger::visitFixitRecord(const serialized_diags::Location &Start,
                                const serialized_diags::Location &End,
                                StringRef Text) {
-  RecordData Record;
-  Record.push_back(RECORD_FIXIT);
-  Record.push_back(FileLookup[Start.FileID]);
-  Record.push_back(Start.Line);
-  Record.push_back(Start.Col);
-  Record.push_back(Start.Offset);
-  Record.push_back(FileLookup[End.FileID]);
-  Record.push_back(End.Line);
-  Record.push_back(End.Col);
-  Record.push_back(End.Offset);
-  Record.push_back(Text.size());
+  RecordData::value_type Record[] = {RECORD_FIXIT, FileLookup[Start.FileID],
+                                     Start.Line, Start.Col, Start.Offset,
+                                     FileLookup[End.FileID], End.Line, End.Col,
+                                     End.Offset, Text.size()};
 
   Writer.State->Stream.EmitRecordWithBlob(
       Writer.State->Abbrevs.get(RECORD_FIXIT), Record, Text);

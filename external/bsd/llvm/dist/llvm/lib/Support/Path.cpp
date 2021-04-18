@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Support/COFF.h"
+#include "llvm/Support/MachO.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -19,9 +20,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include <cctype>
-#include <cstdio>
 #include <cstring>
-#include <fcntl.h>
 
 #if !defined(_MSC_VER) && !defined(__MINGW32__)
 #include <unistd.h>
@@ -30,6 +29,7 @@
 #endif
 
 using namespace llvm;
+using namespace llvm::support::endian;
 
 namespace {
   using llvm::StringRef;
@@ -48,7 +48,6 @@ namespace {
     // * empty (in this case we return an empty string)
     // * either C: or {//,\\}net.
     // * {/,\}
-    // * {.,..}
     // * {file,directory}name
 
     if (path.empty())
@@ -73,12 +72,6 @@ namespace {
 
     // {/,\}
     if (is_separator(path[0]))
-      return path.substr(0, 1);
-
-    if (path.startswith(".."))
-      return path.substr(0, 2);
-
-    if (path[0] == '.')
       return path.substr(0, 1);
 
     // * {file,directory}name
@@ -360,6 +353,10 @@ bool reverse_iterator::operator==(const reverse_iterator &RHS) const {
          Position == RHS.Position;
 }
 
+ptrdiff_t reverse_iterator::operator-(const reverse_iterator &RHS) const {
+  return Position - RHS.Position;
+}
+
 StringRef root_path(StringRef path) {
   const_iterator b = begin(path),
                  pos = b,
@@ -463,17 +460,15 @@ void append(SmallVectorImpl<char> &path, const Twine &a,
   if (!c.isTriviallyEmpty()) components.push_back(c.toStringRef(c_storage));
   if (!d.isTriviallyEmpty()) components.push_back(d.toStringRef(d_storage));
 
-  for (SmallVectorImpl<StringRef>::const_iterator i = components.begin(),
-                                                  e = components.end();
-                                                  i != e; ++i) {
+  for (auto &component : components) {
     bool path_has_sep = !path.empty() && is_separator(path[path.size() - 1]);
-    bool component_has_sep = !i->empty() && is_separator((*i)[0]);
-    bool is_root_name = has_root_name(*i);
+    bool component_has_sep = !component.empty() && is_separator(component[0]);
+    bool is_root_name = has_root_name(component);
 
     if (path_has_sep) {
       // Strip separators from beginning of component.
-      size_t loc = i->find_first_not_of(separators);
-      StringRef c = i->substr(loc);
+      size_t loc = component.find_first_not_of(separators);
+      StringRef c = component.substr(loc);
 
       // Append it.
       path.append(c.begin(), c.end());
@@ -485,7 +480,7 @@ void append(SmallVectorImpl<char> &path, const Twine &a,
       path.push_back(preferred_separator);
     }
 
-    path.append(i->begin(), i->end());
+    path.append(component.begin(), component.end());
   }
 }
 
@@ -527,6 +522,29 @@ void replace_extension(SmallVectorImpl<char> &path, const Twine &extension) {
   path.append(ext.begin(), ext.end());
 }
 
+void replace_path_prefix(SmallVectorImpl<char> &Path,
+                         const StringRef &OldPrefix,
+                         const StringRef &NewPrefix) {
+  if (OldPrefix.empty() && NewPrefix.empty())
+    return;
+
+  StringRef OrigPath(Path.begin(), Path.size());
+  if (!OrigPath.startswith(OldPrefix))
+    return;
+
+  // If prefixes have the same size we can simply copy the new one over.
+  if (OldPrefix.size() == NewPrefix.size()) {
+    std::copy(NewPrefix.begin(), NewPrefix.end(), Path.begin());
+    return;
+  }
+
+  StringRef RelPath = OrigPath.substr(OldPrefix.size());
+  SmallString<256> NewPath;
+  path::append(NewPath, NewPrefix);
+  path::append(NewPath, RelPath);
+  Path.swap(NewPath);
+}
+
 void native(const Twine &path, SmallVectorImpl<char> &result) {
   assert((!path.isSingleStringRef() ||
           path.getSingleStringRef().data() != result.data()) &&
@@ -550,6 +568,16 @@ void native(SmallVectorImpl<char> &Path) {
         *PI = '/';
     }
   }
+#endif
+}
+
+std::string convert_to_slash(StringRef path) {
+#ifdef LLVM_ON_WIN32
+  std::string s = path.str();
+  std::replace(s.begin(), s.end(), '\\', '/');
+  return s;
+#else
+  return path;
 #endif
 }
 
@@ -669,8 +697,53 @@ bool is_absolute(const Twine &path) {
   return rootDir && rootName;
 }
 
-bool is_relative(const Twine &path) {
-  return !is_absolute(path);
+bool is_relative(const Twine &path) { return !is_absolute(path); }
+
+StringRef remove_leading_dotslash(StringRef Path) {
+  // Remove leading "./" (or ".//" or "././" etc.)
+  while (Path.size() > 2 && Path[0] == '.' && is_separator(Path[1])) {
+    Path = Path.substr(2);
+    while (Path.size() > 0 && is_separator(Path[0]))
+      Path = Path.substr(1);
+  }
+  return Path;
+}
+
+static SmallString<256> remove_dots(StringRef path, bool remove_dot_dot) {
+  SmallVector<StringRef, 16> components;
+
+  // Skip the root path, then look for traversal in the components.
+  StringRef rel = path::relative_path(path);
+  for (StringRef C : llvm::make_range(path::begin(rel), path::end(rel))) {
+    if (C == ".")
+      continue;
+    // Leading ".." will remain in the path unless it's at the root.
+    if (remove_dot_dot && C == "..") {
+      if (!components.empty() && components.back() != "..") {
+        components.pop_back();
+        continue;
+      }
+      if (path::is_absolute(path))
+        continue;
+    }
+    components.push_back(C);
+  }
+
+  SmallString<256> buffer = path::root_path(path);
+  for (StringRef C : components)
+    path::append(buffer, C);
+  return buffer;
+}
+
+bool remove_dots(SmallVectorImpl<char> &path, bool remove_dot_dot) {
+  StringRef p(path.data(), path.size());
+
+  SmallString<256> result = remove_dots(p, remove_dot_dot);
+  if (result == path)
+    return false;
+
+  path.swap(result);
+  return true;
 }
 
 } // end namespace path
@@ -740,7 +813,9 @@ std::error_code createUniqueDirectory(const Twine &Prefix,
                             true, 0, FS_Dir);
 }
 
-std::error_code make_absolute(SmallVectorImpl<char> &path) {
+static std::error_code make_absolute(const Twine &current_directory,
+                                     SmallVectorImpl<char> &path,
+                                     bool use_current_directory) {
   StringRef p(path.data(), path.size());
 
   bool rootDirectory = path::has_root_directory(p),
@@ -756,7 +831,9 @@ std::error_code make_absolute(SmallVectorImpl<char> &path) {
 
   // All of the following conditions will need the current directory.
   SmallString<128> current_dir;
-  if (std::error_code ec = current_path(current_dir))
+  if (use_current_directory)
+    current_directory.toVector(current_dir);
+  else if (std::error_code ec = current_path(current_dir))
     return ec;
 
   // Relative path. Prepend the current directory.
@@ -793,12 +870,22 @@ std::error_code make_absolute(SmallVectorImpl<char> &path) {
                    "occurred above!");
 }
 
-std::error_code create_directories(const Twine &Path, bool IgnoreExisting) {
+std::error_code make_absolute(const Twine &current_directory,
+                              SmallVectorImpl<char> &path) {
+  return make_absolute(current_directory, path, true);
+}
+
+std::error_code make_absolute(SmallVectorImpl<char> &path) {
+  return make_absolute(Twine(), path, false);
+}
+
+std::error_code create_directories(const Twine &Path, bool IgnoreExisting,
+                                   perms Perms) {
   SmallString<128> PathStorage;
   StringRef P = Path.toStringRef(PathStorage);
 
   // Be optimistic and try to create the directory
-  std::error_code EC = create_directory(P, IgnoreExisting);
+  std::error_code EC = create_directory(P, IgnoreExisting, Perms);
   // If we succeeded, or had any error other than the parent not existing, just
   // return it.
   if (EC != errc::no_such_file_or_directory)
@@ -810,10 +897,10 @@ std::error_code create_directories(const Twine &Path, bool IgnoreExisting) {
   if (Parent.empty())
     return EC;
 
-  if ((EC = create_directories(Parent)))
+  if ((EC = create_directories(Parent, IgnoreExisting, Perms)))
       return EC;
 
-  return create_directory(P, IgnoreExisting);
+  return create_directory(P, IgnoreExisting, Perms);
 }
 
 std::error_code copy_file(const Twine &From, const Twine &To) {
@@ -897,11 +984,15 @@ std::error_code is_other(const Twine &Path, bool &Result) {
 }
 
 void directory_entry::replace_filename(const Twine &filename, file_status st) {
-  SmallString<128> path(Path.begin(), Path.end());
-  path::remove_filename(path);
+  SmallString<128> path = path::parent_path(Path);
   path::append(path, filename);
   Path = path.str();
   Status = st;
+}
+
+template <size_t N>
+static bool startswith(StringRef Magic, const char (&S)[N]) {
+  return Magic.startswith(StringRef(S, N - 1));
 }
 
 /// @brief Identify the magic in magic.
@@ -910,71 +1001,64 @@ file_magic identify_magic(StringRef Magic) {
     return file_magic::unknown;
   switch ((unsigned char)Magic[0]) {
     case 0x00: {
-      // COFF bigobj or short import library file
-      if (Magic[1] == (char)0x00 && Magic[2] == (char)0xff &&
-          Magic[3] == (char)0xff) {
+      // COFF bigobj, CL.exe's LTO object file, or short import library file
+      if (startswith(Magic, "\0\0\xFF\xFF")) {
         size_t MinSize = offsetof(COFF::BigObjHeader, UUID) + sizeof(COFF::BigObjMagic);
         if (Magic.size() < MinSize)
           return file_magic::coff_import_library;
 
-        int BigObjVersion = *reinterpret_cast<const support::ulittle16_t*>(
-            Magic.data() + offsetof(COFF::BigObjHeader, Version));
-        if (BigObjVersion < COFF::BigObjHeader::MinBigObjectVersion)
-          return file_magic::coff_import_library;
-
         const char *Start = Magic.data() + offsetof(COFF::BigObjHeader, UUID);
-        if (memcmp(Start, COFF::BigObjMagic, sizeof(COFF::BigObjMagic)) != 0)
-          return file_magic::coff_import_library;
-        return file_magic::coff_object;
+        if (memcmp(Start, COFF::BigObjMagic, sizeof(COFF::BigObjMagic)) == 0)
+          return file_magic::coff_object;
+        if (memcmp(Start, COFF::ClGlObjMagic, sizeof(COFF::BigObjMagic)) == 0)
+          return file_magic::coff_cl_gl_object;
+        return file_magic::coff_import_library;
       }
       // Windows resource file
-      const char Expected[] = { 0, 0, 0, 0, '\x20', 0, 0, 0, '\xff' };
-      if (Magic.size() >= sizeof(Expected) &&
-          memcmp(Magic.data(), Expected, sizeof(Expected)) == 0)
+      if (startswith(Magic, "\0\0\0\0\x20\0\0\0\xFF"))
         return file_magic::windows_resource;
       // 0x0000 = COFF unknown machine type
       if (Magic[1] == 0)
         return file_magic::coff_object;
+      if (startswith(Magic, "\0asm"))
+        return file_magic::wasm_object;
       break;
     }
     case 0xDE:  // 0x0B17C0DE = BC wraper
-      if (Magic[1] == (char)0xC0 && Magic[2] == (char)0x17 &&
-          Magic[3] == (char)0x0B)
+      if (startswith(Magic, "\xDE\xC0\x17\x0B"))
         return file_magic::bitcode;
       break;
     case 'B':
-      if (Magic[1] == 'C' && Magic[2] == (char)0xC0 && Magic[3] == (char)0xDE)
+      if (startswith(Magic, "BC\xC0\xDE"))
         return file_magic::bitcode;
       break;
     case '!':
-      if (Magic.size() >= 8)
-        if (memcmp(Magic.data(),"!<arch>\n",8) == 0)
-          return file_magic::archive;
+      if (startswith(Magic, "!<arch>\n") || startswith(Magic, "!<thin>\n"))
+        return file_magic::archive;
       break;
 
     case '\177':
-      if (Magic.size() >= 18 && Magic[1] == 'E' && Magic[2] == 'L' &&
-          Magic[3] == 'F') {
+      if (startswith(Magic, "\177ELF") && Magic.size() >= 18) {
         bool Data2MSB = Magic[5] == 2;
         unsigned high = Data2MSB ? 16 : 17;
         unsigned low  = Data2MSB ? 17 : 16;
-        if (Magic[high] == 0)
+        if (Magic[high] == 0) {
           switch (Magic[low]) {
-            default: break;
+            default: return file_magic::elf;
             case 1: return file_magic::elf_relocatable;
             case 2: return file_magic::elf_executable;
             case 3: return file_magic::elf_shared_object;
             case 4: return file_magic::elf_core;
           }
-        else
-          // It's still some type of ELF file.
-          return file_magic::elf;
+        }
+        // It's still some type of ELF file.
+        return file_magic::elf;
       }
       break;
 
     case 0xCA:
-      if (Magic[1] == char(0xFE) && Magic[2] == char(0xBA) &&
-          Magic[3] == char(0xBE)) {
+      if (startswith(Magic, "\xCA\xFE\xBA\xBE") ||
+          startswith(Magic, "\xCA\xFE\xBA\xBF")) {
         // This is complicated by an overlap with Java class files.
         // See the Mach-O section in /usr/share/file/magic for details.
         if (Magic.size() >= 8 && Magic[7] < 43)
@@ -989,16 +1073,26 @@ file_magic identify_magic(StringRef Magic) {
     case 0xCE:
     case 0xCF: {
       uint16_t type = 0;
-      if (Magic[0] == char(0xFE) && Magic[1] == char(0xED) &&
-          Magic[2] == char(0xFA) &&
-          (Magic[3] == char(0xCE) || Magic[3] == char(0xCF))) {
+      if (startswith(Magic, "\xFE\xED\xFA\xCE") ||
+          startswith(Magic, "\xFE\xED\xFA\xCF")) {
         /* Native endian */
-        if (Magic.size() >= 16) type = Magic[14] << 8 | Magic[15];
-      } else if ((Magic[0] == char(0xCE) || Magic[0] == char(0xCF)) &&
-                 Magic[1] == char(0xFA) && Magic[2] == char(0xED) &&
-                 Magic[3] == char(0xFE)) {
+        size_t MinSize;
+        if (Magic[3] == char(0xCE))
+          MinSize = sizeof(MachO::mach_header);
+        else
+          MinSize = sizeof(MachO::mach_header_64);
+        if (Magic.size() >= MinSize)
+          type = Magic[12] << 24 | Magic[13] << 12 | Magic[14] << 8 | Magic[15];
+      } else if (startswith(Magic, "\xCE\xFA\xED\xFE") ||
+                 startswith(Magic, "\xCF\xFA\xED\xFE")) {
         /* Reverse endian */
-        if (Magic.size() >= 14) type = Magic[13] << 8 | Magic[12];
+        size_t MinSize;
+        if (Magic[0] == char(0xCE))
+          MinSize = sizeof(MachO::mach_header);
+        else
+          MinSize = sizeof(MachO::mach_header_64);
+        if (Magic.size() >= MinSize)
+          type = Magic[15] << 24 | Magic[14] << 12 |Magic[13] << 8 | Magic[12];
       }
       switch (type) {
         default: break;
@@ -1012,6 +1106,7 @@ file_magic identify_magic(StringRef Magic) {
         case 8: return file_magic::macho_bundle;
         case 9: return file_magic::macho_dynamically_linked_shared_lib_stub;
         case 10: return file_magic::macho_dsym_companion;
+        case 11: return file_magic::macho_kext_bundle;
       }
       break;
     }
@@ -1032,9 +1127,8 @@ file_magic identify_magic(StringRef Magic) {
       break;
 
     case 'M': // Possible MS-DOS stub on Windows PE file
-      if (Magic[1] == 'Z') {
-        uint32_t off =
-          *reinterpret_cast<const support::ulittle32_t*>(Magic.data() + 0x3c);
+      if (startswith(Magic, "MZ")) {
+        uint32_t off = read32le(Magic.data() + 0x3c);
         // PE/COFF file, either EXE or DLL.
         if (off < Magic.size() &&
             memcmp(Magic.data()+off, COFF::PEMagic, sizeof(COFF::PEMagic)) == 0)
@@ -1082,3 +1176,20 @@ std::error_code directory_entry::status(file_status &result) const {
 #if defined(LLVM_ON_WIN32)
 #include "Windows/Path.inc"
 #endif
+
+namespace llvm {
+namespace sys {
+namespace path {
+
+bool user_cache_directory(SmallVectorImpl<char> &Result, const Twine &Path1,
+                          const Twine &Path2, const Twine &Path3) {
+  if (getUserCacheDir(Result)) {
+    append(Result, Path1, Path2, Path3);
+    return true;
+  }
+  return false;
+}
+
+} // end namespace path
+} // end namsspace sys
+} // end namespace llvm
