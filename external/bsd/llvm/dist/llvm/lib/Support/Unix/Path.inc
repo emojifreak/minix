@@ -479,7 +479,11 @@ std::error_code mapped_file_region::init(int FD, uint64_t Offset,
                                          mapmode Mode) {
   assert(Size != 0);
 
+#if !defined(__minix)
   int flags = (Mode == readwrite) ? MAP_SHARED : MAP_PRIVATE;
+#else
+  int flags = MAP_PRIVATE;
+#endif /* ! defined(__minix) */
   int prot = (Mode == readonly) ? PROT_READ : (PROT_READ | PROT_WRITE);
   Mapping = ::mmap(nullptr, Size, prot, flags, FD, Offset);
   if (Mapping == MAP_FAILED)

@@ -844,6 +844,16 @@ public:
   Minix(const Driver &D, const llvm::Triple &Triple,
         const llvm::opt::ArgList &Args);
 
+  bool IsMathErrnoDefault() const override { return false; }
+  bool IsObjCNonFragileABIDefault() const override { return true; }
+
+  CXXStdlibType GetCXXStdlibType(const llvm::opt::ArgList &Args) const override;
+
+  void
+  AddClangCXXStdlibIncludeArgs(const llvm::opt::ArgList &DriverArgs,
+                              llvm::opt::ArgStringList &CC1Args) const override;
+  bool IsUnwindTablesDefault() const override { return true; }
+
 protected:
   Tool *buildAssembler() const override;
   Tool *buildLinker() const override;

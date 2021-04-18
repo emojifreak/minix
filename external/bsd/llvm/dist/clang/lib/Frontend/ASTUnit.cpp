@@ -43,7 +43,9 @@
 #include "llvm/Support/MutexGuard.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <atomic>
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <cstdio>
 #include <cstdlib>
 
@@ -209,7 +211,11 @@ const unsigned DefaultPreambleRebuildInterval = 5;
 /// \brief Tracks the number of ASTUnit objects that are currently active.
 ///
 /// Used for debugging purposes only.
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 static std::atomic<unsigned> ActiveASTUnitObjects;
+#else
+static unsigned ActiveASTUnitObjects;
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 
 ASTUnit::ASTUnit(bool _MainFileIsAST)
   : Reader(nullptr), HadModuleLoaderFatalFailure(false),

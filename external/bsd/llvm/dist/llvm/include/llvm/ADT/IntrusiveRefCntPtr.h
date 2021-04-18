@@ -56,7 +56,9 @@
 #ifndef LLVM_ADT_INTRUSIVEREFCNTPTR_H
 #define LLVM_ADT_INTRUSIVEREFCNTPTR_H
 
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <atomic>
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <cassert>
 #include <cstddef>
 
@@ -85,16 +87,27 @@ public:
 
 /// A thread-safe version of \c RefCountedBase.
 template <class Derived> class ThreadSafeRefCountedBase {
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
   mutable std::atomic<int> RefCount;
+#else
+  mutable int RefCount;
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 
 protected:
   ThreadSafeRefCountedBase() : RefCount(0) {}
 
 public:
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
   void Retain() const { RefCount.fetch_add(1, std::memory_order_relaxed); }
 
   void Release() const {
     int NewRefCount = RefCount.fetch_sub(1, std::memory_order_acq_rel) - 1;
+#else
+  void Retain() const { ++RefCount; }
+
+  void Release() const {
+    int NewRefCount = --RefCount;
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
     assert(NewRefCount >= 0 && "Reference count was already zero.");
     if (NewRefCount == 0)
       delete static_cast<const Derived *>(this);

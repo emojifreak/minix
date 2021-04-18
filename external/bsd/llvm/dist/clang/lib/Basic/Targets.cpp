@@ -431,21 +431,32 @@ class MinixTargetInfo : public OSTargetInfo<Target> {
 protected:
   void getOSDefines(const LangOptions &Opts, const llvm::Triple &Triple,
                     MacroBuilder &Builder) const override {
-    // Minix defines
+    // Minix defines; list based off of gcc output
 
     Builder.defineMacro("__minix", "3");
-    Builder.defineMacro("_EM_WSIZE", "4");
-    Builder.defineMacro("_EM_PSIZE", "4");
-    Builder.defineMacro("_EM_SSIZE", "2");
-    Builder.defineMacro("_EM_LSIZE", "4");
-    Builder.defineMacro("_EM_FSIZE", "4");
-    Builder.defineMacro("_EM_DSIZE", "8");
+    Builder.defineMacro("__minix__", "3");
+    Builder.defineMacro("__Minix__", "3");
+    Builder.defineMacro("__unix__");
     Builder.defineMacro("__ELF__");
-    DefineStd(Builder, "unix", Opts);
+    if (Opts.POSIXThreads)
+      Builder.defineMacro("_POSIX_THREADS");
+
+    switch (Triple.getArch()) {
+    default:
+      break;
+    case llvm::Triple::arm:
+    case llvm::Triple::armeb:
+    case llvm::Triple::thumb:
+    case llvm::Triple::thumbeb:
+      Builder.defineMacro("__ARM_DWARF_EH__");
+      break;
+    }
   }
 public:
   MinixTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
-      : OSTargetInfo<Target>(Triple, Opts) {}
+      : OSTargetInfo<Target>(Triple, Opts) {
+    this->MCountName = "_mcount";
+  }
 };
 
 // Linux target
@@ -8606,6 +8617,8 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple,
       return new FreeBSDTargetInfo<ARMleTargetInfo>(Triple, Opts);
     case llvm::Triple::Fuchsia:
       return new FuchsiaTargetInfo<ARMleTargetInfo>(Triple, Opts);
+    case llvm::Triple::Minix:
+      return new MinixTargetInfo<ARMleTargetInfo>(Triple, Opts);
     case llvm::Triple::NetBSD:
       return new NetBSDTargetInfo<ARMleTargetInfo>(Triple, Opts);
     case llvm::Triple::OpenBSD:

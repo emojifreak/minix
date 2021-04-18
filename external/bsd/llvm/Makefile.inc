@@ -63,9 +63,22 @@ LDADD+=		-lexecinfo
 CPPFLAGS+=	-I${LLVM_INCLUDE_OBJDIR} -I${LLVM_INCLUDE_CONFIG} \
 		-I${CLANG_INCLUDE_CONFIG} -I${MCLINKER_INCLUDE_CONFIG}
 
+.if !defined(__MINIX)
 LLVM_PLATFORM=${MACHINE_GNU_ARCH}--netbsd
+.else
+LLVM_PLATFORM=${MACHINE_GNU_ARCH}-elf32-minix
 
-LLVM_CONFIGURE_ARGS=	\
+LLVM_CONFIGURE_ARGS+=	\
+	--with-binutils-include=${NETBSDSRCDIR}/external/gpl3/binutils/dist/include \
+	#--disable-debug-symbols --enable-assertions
+
+.if ${HOST_OSTYPE:C/\-.*//} == "Minix"
+LLVM_CONFIGURE_ARGS+= --disable-threads
+CPPFLAGS+= -D_NLS_PRIVATE=1
+.endif # ${HOST_OSTYPE:C/\-.*//} == "Minix"
+.endif # !defined(__MINIX)
+
+LLVM_CONFIGURE_ARGS+=	\
 	--enable-targets=x86,powerpc,sparc,aarch64,arm,mips \
 	--with-c-include-dirs=/usr/include/clang-${CLANG_VERSION:R}:/usr/include \
 	--disable-timestamps --prefix=/usr --sysconfdir=/etc/llvm \

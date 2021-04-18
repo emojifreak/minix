@@ -527,7 +527,7 @@ void Darwin::AddDeploymentTarget(DerivedArgList &Args) const {
       if (llvm::sys::path::is_absolute(env) && getVFS().exists(env) &&
           StringRef(env) != "/") {
         Args.append(Args.MakeSeparateArg(
-            nullptr, Opts.getOption(options::OPT_isysroot), env));
+            0, Opts.getOption(options::OPT_isysroot), env));
       }
     }
   }
@@ -536,6 +536,8 @@ void Darwin::AddDeploymentTarget(DerivedArgList &Args) const {
   Arg *iOSVersion = Args.getLastArg(options::OPT_miphoneos_version_min_EQ);
   Arg *TvOSVersion = Args.getLastArg(options::OPT_mtvos_version_min_EQ);
   Arg *WatchOSVersion = Args.getLastArg(options::OPT_mwatchos_version_min_EQ);
+  Arg *iOSSimVersion = Args.getLastArg(
+    options::OPT_mios_simulator_version_min_EQ);
 
   if (OSXVersion && (iOSVersion || TvOSVersion || WatchOSVersion)) {
     getDriver().Diag(diag::err_drv_argument_not_allowed_with)
@@ -3846,8 +3848,56 @@ void NetBSD::addLibStdCxxIncludePaths(const llvm::opt::ArgList &DriverArgs,
 
 Minix::Minix(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
     : Generic_ELF(D, Triple, Args) {
-  getFilePaths().push_back(getDriver().Dir + "/../lib");
-  getFilePaths().push_back("/usr/lib");
+
+  if (getDriver().UseStdLib) {
+    // When targeting a 32-bit platform, try the special directory used on
+    // 64-bit hosts, and only fall back to the main library directory if that
+    // doesn't work.
+    // FIXME: It'd be nicer to test if this directory exists, but I'm not sure
+    // what all logic is needed to emulate the '=' prefix here.
+    switch (Triple.getArch()) {
+    case llvm::Triple::x86:
+      getFilePaths().push_back("=/usr/lib/i386");
+      break;
+#if 0 // LSC: Not yet useful for MINIX, but kept to simplify comparison with NetBSD 
+    case llvm::Triple::arm:
+    case llvm::Triple::armeb:
+    case llvm::Triple::thumb:
+    case llvm::Triple::thumbeb:
+      switch (Triple.getEnvironment()) {
+      case llvm::Triple::EABI:
+      case llvm::Triple::GNUEABI:
+        getFilePaths().push_back("=/usr/lib/eabi");
+        break;
+      case llvm::Triple::EABIHF:
+      case llvm::Triple::GNUEABIHF:
+        getFilePaths().push_back("=/usr/lib/eabihf");
+        break;
+      default:
+        getFilePaths().push_back("=/usr/lib/oabi");
+        break;
+      }
+      break;
+    case llvm::Triple::mips64:
+    case llvm::Triple::mips64el:
+      if (tools::mips::hasMipsAbiArg(Args, "o32"))
+        getFilePaths().push_back("=/usr/lib/o32");
+      else if (tools::mips::hasMipsAbiArg(Args, "64"))
+        getFilePaths().push_back("=/usr/lib/64");
+      break;
+    case llvm::Triple::ppc:
+      getFilePaths().push_back("=/usr/lib/powerpc");
+      break;
+    case llvm::Triple::sparc:
+      getFilePaths().push_back("=/usr/lib/sparc");
+      break;
+#endif /* 0 */
+    default:
+      break;
+    }
+
+    getFilePaths().push_back("=/usr/lib");
+  }
 }
 
 Tool *Minix::buildAssembler() const {
@@ -3855,6 +3905,65 @@ Tool *Minix::buildAssembler() const {
 }
 
 Tool *Minix::buildLinker() const { return new tools::minix::Linker(*this); }
+
+ToolChain::CXXStdlibType
+Minix::GetCXXStdlibType(const ArgList &Args) const {
+  if (Arg *A = Args.getLastArg(options::OPT_stdlib_EQ)) {
+    StringRef Value = A->getValue();
+    if (Value == "libstdc++")
+      return ToolChain::CST_Libstdcxx;
+    if (Value == "libc++")
+      return ToolChain::CST_Libcxx;
+
+    getDriver().Diag(diag::err_drv_invalid_stdlib_name)
+      << A->getAsString(Args);
+  }
+
+#if 0 /* LSC: We only us libcxx by default */
+  unsigned Major, Minor, Micro;
+  getTriple().getOSVersion(Major, Minor, Micro);
+  if (Major >= 7 || (Major == 6 && Minor == 99 && Micro >= 49) || Major == 0) {
+    switch (getArch()) {
+    case llvm::Triple::aarch64:
+    case llvm::Triple::arm:
+    case llvm::Triple::armeb:
+    case llvm::Triple::thumb:
+    case llvm::Triple::thumbeb:
+    case llvm::Triple::ppc:
+    case llvm::Triple::ppc64:
+    case llvm::Triple::ppc64le:
+    case llvm::Triple::x86:
+    case llvm::Triple::x86_64:
+      return ToolChain::CST_Libcxx;
+    default:
+      break;
+    }
+  }
+  return ToolChain::CST_Libstdcxx;
+#else
+  return ToolChain::CST_Libcxx;
+#endif /* 0 */
+}
+
+void Minix::AddClangCXXStdlibIncludeArgs(const ArgList &DriverArgs,
+                                          ArgStringList &CC1Args) const {
+  if (DriverArgs.hasArg(options::OPT_nostdlibinc) ||
+      DriverArgs.hasArg(options::OPT_nostdincxx))
+    return;
+
+  switch (GetCXXStdlibType(DriverArgs)) {
+  case ToolChain::CST_Libcxx:
+    addSystemInclude(DriverArgs, CC1Args,
+                     getDriver().SysRoot + "/usr/include/c++/");
+    break;
+  case ToolChain::CST_Libstdcxx:
+    addSystemInclude(DriverArgs, CC1Args,
+                     getDriver().SysRoot + "/usr/include/g++");
+    addSystemInclude(DriverArgs, CC1Args,
+                     getDriver().SysRoot + "/usr/include/g++/backward");
+    break;
+  }
+}
 
 static void addPathIfExists(const Driver &D, const Twine &Path,
                             ToolChain::path_list &Paths) {

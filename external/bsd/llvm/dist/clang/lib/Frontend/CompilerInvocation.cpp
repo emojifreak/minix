@@ -43,7 +43,9 @@
 #include "llvm/Support/Process.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/Support/ScopedPrinter.h"
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <atomic>
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
 #include <memory>
 #include <sys/stat.h>
 #include <system_error>
@@ -2633,7 +2635,11 @@ void BuryPointer(const void *Ptr) {
   // is what we want in such case.
   static const size_t kGraveYardMaxSize = 16;
   LLVM_ATTRIBUTE_UNUSED static const void *GraveYard[kGraveYardMaxSize];
+#if !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
   static std::atomic<unsigned> GraveYardSize;
+#else
+  static unsigned GraveYardSize;
+#endif // !defined(_LIBCPP_HAS_NO_THREADS) && defined(__minix)
   unsigned Idx = GraveYardSize++;
   if (Idx >= kGraveYardMaxSize)
     return;

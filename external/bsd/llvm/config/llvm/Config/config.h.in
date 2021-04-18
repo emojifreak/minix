@@ -142,8 +142,10 @@
 /* Define to 1 if you have the `psapi' library (-lpsapi). */
 /* #undef HAVE_LIBPSAPI */
 
+#if !defined(__minix)
 /* Define to 1 if you have the `pthread' library (-lpthread). */
 #define HAVE_LIBPTHREAD 1
+#endif /* !defined(__minix) */
 
 /* Define to 1 if you have the `shell32' library (-lshell32). */
 /* #undef HAVE_LIBSHELL32 */
@@ -190,12 +192,15 @@
 /* Define to 1 if you have the `posix_fallocate' function. */
 #define HAVE_POSIX_FALLOCATE 1
 
+#if !defined(__minix)
 /* Define to 1 if you have the `posix_spawn' function. */
 #define HAVE_POSIX_SPAWN 1
+#endif /* !defined(__minix) */
 
 /* Define to 1 if you have the `pread' function. */
 #define HAVE_PREAD 1
 
+#if !defined(__minix)
 /* Have pthread_getspecific */
 #define HAVE_PTHREAD_GETSPECIFIC 1
 
@@ -207,6 +212,7 @@
 
 /* Have pthread_rwlock_init */
 #define HAVE_PTHREAD_RWLOCK_INIT 1
+#endif /* !defined(__minix) */
 
 /* Define to 1 if you have the `realpath' function. */
 #define HAVE_REALPATH 1
@@ -247,8 +253,10 @@
 /* Define to 1 if you have the `strtoll' function. */
 #define HAVE_STRTOLL 1
 
+#if !defined(__minix)
 /* Define to 1 if you have the `sysconf' function. */
 #define HAVE_SYSCONF 1
+#endif /* !defined(__minix) */
 
 /* Define to 1 if you have the <sys/dir.h> header file, and it defines `DIR'.
    */
@@ -373,13 +381,15 @@
 /* #undef LINK_POLLY_INTO_TOOLS */
 
 /* Target triple LLVM will generate code for by default */
-#define LLVM_DEFAULT_TARGET_TRIPLE "x86_64--netbsd"
+#define LLVM_DEFAULT_TARGET_TRIPLE "i586-elf32-minix"
 
 /* Define to 1 to checks for ABI changes, and to 0 otherwise. */
 #define LLVM_ENABLE_ABI_BREAKING_CHECKS 0
 
+#if !defined(__minix)
 /* Define if threads enabled */
 #define LLVM_ENABLE_THREADS 1
+#endif /* !defined(__minix) */
 
 /* Define if zlib compression is available */
 #define LLVM_ENABLE_ZLIB 1
@@ -388,7 +398,7 @@
 #define LLVM_HAS_ATOMICS 1
 
 /* Host triple LLVM will be executed on */
-#define LLVM_HOST_TRIPLE "x86_64--netbsd"
+#define LLVM_HOST_TRIPLE "i586-elf32-minix"
 
 /* LLVM architecture name for the native architecture, if available */
 #define LLVM_NATIVE_ARCH X86

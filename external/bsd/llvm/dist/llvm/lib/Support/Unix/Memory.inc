@@ -155,9 +155,13 @@ Memory::protectMappedMemory(const MemoryBlock &M, unsigned Flags) {
 
   uintptr_t Start = alignAddr((uint8_t *)M.Address - PageSize + 1, PageSize);
   uintptr_t End = alignAddr((uint8_t *)M.Address + M.Size, PageSize);
+#if !defined(__minix)
   int Result = ::mprotect((void *)Start, End - Start, Protect);
 
   if (Result != 0)
+#else
+  errno = ENOSYS;
+#endif /* !defined(__minix) */
     return std::error_code(errno, std::generic_category());
 
   if (Flags & MF_EXEC)

@@ -481,8 +481,14 @@ std::string ToolChain::ComputeLLVMTriple(const ArgList &Args,
         Triple.isOSBinFormatMachO()
             ? tools::arm::getARMCPUForMArch(MArch, Triple).str()
             : tools::arm::getARMTargetCPU(MCPU, MArch, Triple);
+#if defined(__minix) || 1
+    // Minix/ARM-specific force to ARMv7 and EABI.
+    StringRef Suffix = "v7";
+    Triple.setEnvironment(llvm::Triple::EABI);
+#else
     StringRef Suffix =
       tools::arm::getLLVMArchSuffixForARM(CPU, MArch, Triple);
+#endif /* defined(__minix) || 1 */
     bool IsMProfile = ARM::parseArchProfile(Suffix) == ARM::PK_M;
     bool ThumbDefault = IsMProfile || (ARM::parseArchVersion(Suffix) == 7 && 
                                        getTriple().isOSBinFormatMachO());
