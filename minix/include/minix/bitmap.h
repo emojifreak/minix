@@ -1,6 +1,13 @@
 #ifndef _BITMAP_H
 #define _BITMAP_H
 
+#ifndef __ASSEMBLY__
+#define __minix 3
+#define _NETBSD_SOURCE 1
+#include <sys/types.h>
+#include <limits.h>
+#endif
+
 /* Bit map operations to manipulate bits of a simple mask variable. */
 #define bit_set(mask, n)	((mask) |= (1 << (n)))
 #define bit_unset(mask, n)	((mask) &= ~(1 << (n)))
