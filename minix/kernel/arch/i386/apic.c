@@ -164,7 +164,7 @@ void arch_eoi(void)
  * arch specific cpulocals. As this variable is write-once-read-only it is ok to
  * have at as an array until we resolve the cpulocals properly
  */
-static u32_t lapic_bus_freq[CONFIG_MAX_CPUS];
+static u64_t lapic_bus_freq[CONFIG_MAX_CPUS];
 /* the probe period will be roughly 100ms */
 #define PROBE_TICKS	(system_hz / 10)
 
@@ -442,7 +442,8 @@ static int spurious_irq_handler(irq_hook_t * UNUSED(hook))
 
 static void apic_calibrate_clocks(unsigned cpu)
 {
-	u32_t lvtt, val, lapic_delta;
+	u32_t lvtt, val;
+	u64_t lapic_delta;
 	u64_t tsc_delta;
 	u64_t cpu_freq;
 
@@ -515,7 +516,7 @@ static void apic_calibrate_clocks(unsigned cpu)
 	tsc_delta = tsc1 - tsc0;
 
 	lapic_bus_freq[cpuid] = system_hz * lapic_delta / (PROBE_TICKS - 1);
-	BOOT_VERBOSE(printf("APIC bus freq %u MHz\n",
+	BOOT_VERBOSE(printf("APIC bus freq %llu MHz\n",
 				lapic_bus_freq[cpuid] / 1000000));
 	cpu_freq = (tsc_delta / (PROBE_TICKS - 1)) * make64(system_hz, 0);
 	cpu_set_freq(cpuid, cpu_freq);
