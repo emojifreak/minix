@@ -13,6 +13,7 @@
 #include <machine/cmos.h>
 #include <machine/bios.h>
 
+#include "kernel/kernel.h"
 #include "kernel/spinlock.h"
 #include "kernel/smp.h"
 #include "apic.h"
